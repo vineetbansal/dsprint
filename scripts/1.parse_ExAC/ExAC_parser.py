@@ -1,6 +1,7 @@
 import os.path
 import re
 import json
+import gzip
 import pandas as pd
 from collections import defaultdict
 
@@ -105,7 +106,7 @@ if __name__ == '__main__':
     CSQ_I = {}
 
     for chromosome, output_file in zip(CHROMOSOMES, OUTPUT_FILES):
-        with open(INPUT_FILE, 'r') as vcf_file:
+        with gzip.open(INPUT_FILE, 'rt') as vcf_file:
 
             info_list = []
             d = defaultdict(list)
