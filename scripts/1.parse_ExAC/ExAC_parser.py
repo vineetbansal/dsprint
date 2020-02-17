@@ -1,31 +1,57 @@
+import os.path
+import re
+import json
 import pandas as pd
 from collections import defaultdict
 
+import dsprint
+
+
+# Positions in the VCF record - these are fixed as per .vcf format and can/should be hardcoded
+CHROM, POS, ID, REF, ALT, QUAL, FILTER, INFO = tuple(range(8))
+
+# The 17 CSQ Fields we are interested in
+CSQs = ('GENE', 'FEATURE', 'FEATURE_TYPE', 'CONSEQUENCE', 'PROTEIN_POSITION', 'AMINO_ACIDS', 'CODONS', 'ALLELE_NUM',
+        'STRAND', 'ENSP', 'SWISSPROT', 'SIFT', 'POLYPHEN', 'EXON', 'INTRON', 'DOMAINS', 'CLIN_SIG')
+
+# https://macarthurlab.org/2016/03/17/reproduce-all-the-figures-a-users-guide-to-exac-part-2/#multi-allelic-enriched-regions
+MULTI_ALLELIC_REGIONS = {
+    # Keep the keys strings to account for x/y chromosomes
+    '1':  [(152975000, 152976000)],
+    '2':  [(89160000, 89162000)],
+    '14': [(106329000, 106331000), (107178000, 107180000)],
+    '17': [(18967000, 18968000), (19091000, 19092000)],
+    '22': [(23223000, 23224000)],
+}
+
+REMOVE_MULTI_ALLELIC = True
+
+with open(os.path.join(os.path.dirname(dsprint.__file__), 'config.json')) as json_file:
+    config = json.load(json_file)['csq']
 
 try:
     INPUT_FILE = snakemake.input[0]
     OUTPUT_FILES = snakemake.output
-    CHROMOSOMES = [O[O.rindex('_')+1:O.rindex('.')] for O in OUTPUT_FILES]
+    WORK = [o.lstrip(config['output_prefix']).rstrip(config['output_suffix']) for o in OUTPUT_FILES]
 except NameError:
     import sys
-    if len(sys.argv) < 3:
-        print('Usage: <script> <input_folder> <chromosome_number>')
+    if len(sys.argv) < 2:
+        print('Usage: <script> <chromosome_number>')
         sys.exit(0)
 
-    INPUT_FILE, CHROMOSOMES = sys.argv[1], [sys.argv[2]]
-    OUTPUT_FILES = [f"/media/vineetb/t5-vineetb/dsprint/out/parsed_chrom_{C}.csv" for C in CHROMOSOMES]
+    WORK = [sys.argv[1]]
+    INPUT_FILE = config['input_file']
+    OUTPUT_FILES = [f"{config['output_prefix']}{W}{config['output_suffix']}.csv" for W in WORK]
 
 
 def update_main_fields(line_parts, d):
-    d["chrom"].append(line_parts[CHROM])
-    d["pos"].append(int(line_parts[POS]))
-    d["id"].append(line_parts[ID])
-    d["ref"].append(line_parts[REF])
-    d["qual"].append(line_parts[QUAL])
-    d["filter"].append(line_parts[FILTER])
+
+    for k in ('CHROM', 'POS', 'ID', 'REF', 'QUAL', 'FILTER'):
+        d[k].append(line_parts[globals()[k]])
+
     info = line_parts[INFO]
 
-    # AC = Allele Count
+    # AC = allele count in genotypes, for each ALT allele, in the same order as listed
     AC_beg = info.find("AC=")
     AC_end = info.find(";", AC_beg)
     AC_list = (info[AC_beg + 3:AC_end]).split(",")
@@ -35,232 +61,134 @@ def update_main_fields(line_parts, d):
     AC_adj_end = info.find(";", AC_adj_beg)
     AC_adj_list = (info[AC_adj_beg + 7:AC_adj_end]).split(",")
 
-    # AF = Allele Frequency
+    # AF = allele frequency for each ALT allele in the same order as listed (use this when estimated from primary data,
+    # not called genotypes)
     AF_beg = info.find("AF=")
     AF_end = info.find(";", AF_beg)
     AF_list = (info[AF_beg + 3:AF_end]).split(",")
 
-    # AN = Allele Number
+    # AN = total number of alleles in called genotypes
     AN_beg = info.find("AN=")
     AN_end = info.find(";", AN_beg)
-    d["AN"].append(info[AN_beg + 3:AN_end])
+    d['AN'].append(info[AN_beg + 3:AN_end])
 
     # AN_adj = Adjusted Allele Number
     AN_adj_beg = info.find("AN_Adj=")
     AN_adj_end = info.find(";", AN_adj_beg)
-    d["AN_Adj"].append(info[AN_adj_beg + 7:AN_adj_end])
+    d['AN_ADJ'].append(info[AN_adj_beg + 7:AN_adj_end])
 
-    # DP = "Approximate read depth
+    # DP = combined depth across samples, e.g. DP=154
     DP_beg = info.find("DP=")
     DP_end = info.find(";", DP_beg)
-    d["DP"].append(info[DP_beg + 3:DP_end])
+    d['DP'].append(info[DP_beg + 3:DP_end])
 
     return AC_list, AC_adj_list, AF_list
 
 
 def fill_empty_fields(line_parts, alt_list, d):
-    """A function that updates empty strings for CSQ fields when there's no CSQ data."""
-
-    # Adding one line per each variation (can be several even when tere's no CSQ)
     for i in range(len(alt_list)):
-        # Update the main fields
-        (AC_list, AC_adj_list, AF_list) = update_main_fields(line_parts, d)
-        d["AC"].append(AC_list[i])
-        d["AC_Adj"].append(AC_adj_list[i])
-        d["AF"].append(AF_list[i])
+        AC_list, AC_adj_list, AF_list = update_main_fields(line_parts, d)
+        d['AC'].append(AC_list[i])
+        d['AC_ADJ'].append(AC_adj_list[i])
+        d['AF'].append(AF_list[i])
+        d['ALT'].append(alt_list[i])
 
-        # Update the alt
-        d["alt"].append(alt_list[i])
-
-        # Update the rest of fields with empty string
-        d["gene"].append("")
-        d["feature"].append("")
-        d["feature_type"].append("")
-        d["conseq"].append("")
-        d["prot_pos"].append("")
-        d["amino_acids"].append("")
-        d["codons"].append("")
-        d["strand"].append("")
-        d["ENSP"].append("")
-        d["SWISSPROT"].append("")
-        d["SIFT"].append("")
-        d["PolyPhen"].append("")
-        d["exon"].append("")
-        d["intron"].append("")
-        d["domains"].append("")
-        d["clin_sig"].append("")
+        for k in CSQs:
+            d[k].append('')
 
 
 if __name__ == '__main__':
 
-    # Positions in the VCF record
-    CHROM, POS, ID, REF, ALT, QUAL, FILTER, INFO = tuple(range(8))
+    CHROMOSOMES = WORK
 
-    # CSQ positions
-    # http://useast.ensembl.org/info/docs/tools/vep/vep_formats.html?redirect=no
-    GENE = 1  # Ensembl stable ID of affected gene
-    FEATURE = 2  # Ensembl stable ID of feature
-    FEATURE_TYPE = 3  # type of feature. Currently one of Transcript, RegulatoryFeature, MotifFeature
-    CONSEQ = 4  # consequence type of this variant
-    PROT_POS = 7  # relative position of amino acid in protein
-    AMINO_ACIDS = 8  # the change. only given if the variant affects the protein-coding sequence
-    CODONS = 9  # the alternative codons with the variant base in upper case
-    ALLELE_NUM = 11  # Allele number from input; 0 is reference, 1 is first alternate etc
-    STRAND = 13  # the DNA strand (1 or -1) on which the transcript/feature lies
-    ENSP = 20  # the Ensembl protein identifier of the affected transcript
-    SWISSPROT = 21  # UniProtKB/Swiss-Prot identifier of protein product
-    SIFT = 24  # the SIFT prediction and/or score, with both given as prediction(score)
-    POLYPHEN = 25  # the PolyPhen prediction and/or score
-    EXON = 26  # the exon number (out of total number)
-    INTRON = 27  # the intron number (out of total number)
-    DOMAINS = 28  # the source and identifer of any overlapping protein domains
-    GMAF = 31  # Non-reference allele and frequency of existing variant in 1000 Genomes
-    CLIN_SIG = 38  # Clinical significance of variant from dbSNP: http://varianttools.sourceforge.net/Annotation/DbSNP
-    # Variant Clinical Significance, 0 - unknown, 1 -
-    # untested, 2 - non-pathogenic, 3 - probable-non-pathogenic, 4 - probable-pathogenic,
-    # 5 - pathogenic, 6 - drug-response, 7 - histocompatibility, 255 - other
-
-    # https://macarthurlab.org/2016/03/17/reproduce-all-the-figures-a-users-guide-to-exac-part-2/#multi-allelic-enriched-regions
-    multi_allelic_regions = {'14': [[106329000, 106331000], [107178000, 107180000]],
-                             '2': [[89160000, 89162000]],
-                             '17': [[18967000, 18968000], [19091000, 19092000]],
-                             '22': [[23223000, 23224000]],
-                             '1': [[152975000, 152976000]]}
-    # A flag for removing the multi-allelic regions
-    removeMultiAllelic = True
+    # The 0-indexed positions of these CSQs in the data - will be determined once we parse the metadata
+    CSQ_I = {}
 
     for chromosome, output_file in zip(CHROMOSOMES, OUTPUT_FILES):
+        with open(INPUT_FILE, 'r') as vcf_file:
 
-        # Read the file
-        vcf_file = open(INPUT_FILE, 'r')
+            info_list = []
+            d = defaultdict(list)
 
-        # Process meta-data
-        metadata_dict = {}
-        data_flag = False
-        for line in vcf_file:
-            if line.startswith("##"):
-                # assign keys according to the format
-                key = line[2:line.index('=')]
-                if key == "ALT":
-                    val = dict.fromkeys(["ID", "Description"])
-                elif key == "FILTER":
-                    val = dict.fromkeys(["ID", "Description"])
-                elif key == "FORMAT":
-                    val = dict.fromkeys(["ID", "Number", "Type", "Description"])
-                elif key == "INFO":
-                    val = dict.fromkeys(["ID", "Number", "Type", "Description"])
-                elif key == "contig":
-                    val = dict.fromkeys(["ID", "length"])
-                elif key == "reference":
-                    val = dict.fromkeys(["file"])
-                # Not processing other metadata types
-                else:
+            for line_no, line in enumerate(vcf_file):
+
+                if line.startswith("##INFO="):
+                    line = line[7:].strip().lstrip('<').rstrip('>')
+                    _id, _desc = re.match(r'ID=(\w+),.*Description=\"(.*)\"', line).groups()
+                    info_list.append({'ID': _id, 'Description': _desc})
+
                     continue
 
-                # fill in the data
-                for f in val.keys():
-                    f_key = line.find(f)
-                    f_beg = line.find("=", f_key)
-                    if f_beg < 0:
-                        f_beg = line.find(":", f_key)  # When parsing reference line
-                    f_end = line.find(",", f_beg)
-                    if f_end < 0:
-                        f_end = line.find(">")
-                    if f_end < 0:  # When parsing reference line
-                        f_end = line.find("\n")
-                    val[f] = line[f_beg + 1:f_end]
+                elif line.startswith('#'):
+                    continue
 
-                # Adding to the metadata dictionary
-                if key not in metadata_dict:
-                    metadata_dict[key] = [val]
-                else:
-                    metadata_dict[key].append(val)
+                if info_list and not CSQ_I:
+                    # Converting INFO entries to a DataFrame for ease of use, but not saving yet
+                    info_df = pd.DataFrame(info_list).set_index("ID")
+                    assert 'CSQ' in info_df.index, \
+                        'CSQ key not found in INFO. Regenerate .vcf using --vcf_info_field CSQ'
+                    try:
+                        _desc = info_df.loc['CSQ'].Description
+                        csq_format = _desc[_desc.index('Format: ') + 8:].strip('\"\'').upper()
+                        csq_fields = csq_format.split('|')
+                        CSQ_I = {CSQ: csq_fields.index(CSQ) for CSQ in CSQs}
+                    except (IndexError, ValueError):
+                        raise RuntimeError('Unable to determine CSQ positions for desired CSQ fields')
 
-            # Processing the data starting the next line
-            elif line.startswith("#CHROM"):
-                data_flag = True
-                break
+                line_parts = line.split("\t")
 
-        # Arrange the INFO metadata to a data-frame
-        info_df = pd.DataFrame(metadata_dict["INFO"])
-        info_df = info_df.sort_values("ID")
+                if line_parts[CHROM] != chromosome:
+                    if d:
+                        break  # Chromosome entry changed, and we have data for this chromosome - no need to continue
+                    else:
+                        continue
 
-        d = defaultdict(list)
-        for line_no, line in enumerate(vcf_file):
-
-            line_parts = line.split("\t")
-
-            if line_parts[CHROM] != chromosome:
-                continue
-
-            # Excluding multi-allelic regions
-            if removeMultiAllelic:
-                chrom = line_parts[CHROM]
-                if chrom in multi_allelic_regions.keys():
+                if REMOVE_MULTI_ALLELIC:
                     pos = int(line_parts[POS])
-                    regions = multi_allelic_regions[chrom]
-                    for region in regions:
-                        if region[0] <= pos <= region[1]:
-                            # Multi-allelic region - excluding from analysis
+                    for _start, _end in MULTI_ALLELIC_REGIONS.get(chromosome, []):
+                        if _start <= pos <= _end:
                             continue
 
-            # Extracting alt
-            alt_list = line_parts[ALT].split(",")
+                alt_list = line_parts[ALT].split(",")
+                info = line_parts[INFO]
 
-            # Extracting fields from the info
-            info = line_parts[INFO]
+                CSQ_start = info.find("CSQ=")
+                if CSQ_start == -1:
+                    fill_empty_fields(line_parts, alt_list, d)
+                else:
+                    CSQ_data = info[CSQ_start + 4:]
+                    CSQ_features = CSQ_data.split(",")
 
-            # CSQ = Consequence type as predicted by VEP
-            CSQ_beg = info.find("CSQ=")
-            if CSQ_beg == -1:
-                # NO CSQ data: just fill in empty strings instead
-                fill_empty_fields(line_parts, alt_list, d)
-            else:
-                CSQ_data = info[CSQ_beg + 4:]
-                CSQ_features = CSQ_data.split(",")
+                    for CSQ in CSQ_features:
+                        CSQ_PARTS = CSQ.split('|')
+                        # Update the main fields for each CSQ feature (so each CSQ will appear in a different line)
+                        AC_list, AC_adj_list, AF_list = update_main_fields(line_parts, d)
 
-                for CSQ in CSQ_features:
-                    CSQ_PARTS = CSQ.split('|')
-                    # Update the main fields for each CSQ feature (so each CSQ will appear in a different line)
-                    AC_list, AC_adj_list, AF_list = update_main_fields(line_parts, d)
+                        # Allele_num for deciding which alt, AC and AF to add - 1-indexed
+                        allele_num = int(CSQ_PARTS[CSQ_I['ALLELE_NUM']])
+                        assert allele_num > 0, 'Unexpected Condition'
 
-                    # Allele_num for deciding which alt, AC and AF to add
-                    allele_num = int(CSQ_PARTS[ALLELE_NUM])
-                    # Adding the corresponding alt
-                    if allele_num == 0:
-                        print("allele num = 0 " + line_parts[POS])  # Making sure all the features correspond to an alt (0 = ref)
-                    else:
-                        d["alt"].append(alt_list[allele_num - 1])
-                        d["AC"].append(AC_list[allele_num - 1])
-                        d["AC_Adj"].append(AC_adj_list[allele_num - 1])
-                        d["AF"].append(AF_list[allele_num - 1])
+                        d['ALT'].append(alt_list[allele_num - 1])
+                        d['AC'].append(AC_list[allele_num - 1])
+                        d['AC_ADJ'].append(AC_adj_list[allele_num - 1])
+                        d['AF'].append(AF_list[allele_num - 1])
 
-                    d["gene"].append(CSQ_PARTS[GENE])
-                    d["feature"].append(CSQ_PARTS[FEATURE])
-                    d["feature_type"].append(CSQ_PARTS[FEATURE_TYPE])
-                    d["conseq"].append(CSQ_PARTS[CONSEQ])
-                    d["prot_pos"].append(CSQ_PARTS[PROT_POS])
-                    d["amino_acids"].append(CSQ_PARTS[AMINO_ACIDS])
-                    d["codons"].append(CSQ_PARTS[CODONS])
-                    d["strand"].append(CSQ_PARTS[STRAND])
-                    d["ENSP"].append(CSQ_PARTS[ENSP])
-                    d["SWISSPROT"].append(CSQ_PARTS[SWISSPROT])
-                    d["SIFT"].append(CSQ_PARTS[SIFT])
-                    d["PolyPhen"].append(CSQ_PARTS[POLYPHEN])
-                    d["exon"].append(CSQ_PARTS[EXON])
-                    d["intron"].append(CSQ_PARTS[INTRON])
-                    d["domains"].append(CSQ_PARTS[DOMAINS])
-                    d["clin_sig"].append(CSQ_PARTS[CLIN_SIG])
+                        for k in CSQs:
+                            d[k].append(CSQ_PARTS[CSQ_I[k]])
 
-        # Only needed for checksum
-        columns = ["chrom", "pos", "id", "ref", "alt", "qual", "filter", "AC", "AC_Adj", "AF", "AN", "AN_Adj", "DP",
-                     "gene",
-                     "feature", "feature_type", "conseq", "prot_pos",
-                     "amino_acids", "codons", "strand", "ENSP", "SWISSPROT", "SIFT", "PolyPhen", "exon", "intron",
-                     "domains",
-                     "clin_sig"]
+            df = pd.DataFrame(d)
 
-        pd.DataFrame(d).to_csv(output_file, sep='\t', columns=columns)
-
-        vcf_file.close()
-
+            # ----------------------------------------------------------
+            # Deterministic ordering of columns only needed for checksum
+            # This block should be removed after output files are validated against the golden files
+            old_columns = ["CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "AC", "AC_ADJ", "AF", "AN", "AN_ADJ",
+                           "DP", "GENE", "FEATURE", "FEATURE_TYPE", "CONSEQUENCE", "PROTEIN_POSITION", "AMINO_ACIDS",
+                           "CODONS", "STRAND", "ENSP", "SWISSPROT", "SIFT", "POLYPHEN", "EXON", "INTRON", "DOMAINS",
+                           "CLIN_SIG"]
+            df = df[old_columns]
+            new_columns = ["chrom", "pos", "id", "ref", "alt", "qual", "filter", "AC", "AC_Adj", "AF", "AN", "AN_Adj",
+                           "DP", "gene", "feature", "feature_type", "conseq", "prot_pos", "amino_acids", "codons",
+                           "strand", "ENSP", "SWISSPROT", "SIFT", "PolyPhen", "exon", "intron", "domains", "clin_sig"]
+            df.rename(columns={k: v for k, v in zip(old_columns, new_columns)}, inplace=True)
+            # ----------------------------------------------------------
+            df.to_csv(output_file, sep='\t')

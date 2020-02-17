@@ -1,0 +1,10 @@
+name: 'dsprint3'
+
+channels:
+  - defaults
+
+dependencies:
+  - pip
+  - python=3.7
+  - pip:
+    - -r file:requirements.txt

@@ -1,7 +1,15 @@
+configfile: "dsprint/config.json"
+
 rule csq:
+    threads: 4
     input:
-        "/media/vineetb/t5-vineetb/dsprint/ExAC.r0.3.sites.vep.vcf"
+        config['csq']['input_file']
     output:
-        expand("/media/vineetb/t5-vineetb/dsprint/out/parsed_chrom_{c}.csv", c=[1,2,4])
+        output=expand(
+            "{output_prefix}{output}{output_suffix}",
+            output_prefix=config['csq']['output_prefix'],
+            output=list(range(1, 23)) + ['X', 'Y'],
+            output_suffix=config['csq']['output_suffix']
+        )
     script:
         "scripts/1.parse_ExAC/ExAC_parser.py"
