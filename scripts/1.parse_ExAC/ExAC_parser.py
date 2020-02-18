@@ -54,34 +54,34 @@ def update_main_fields(line_parts, d):
     info = line_parts[INFO]
 
     # AC = allele count in genotypes, for each ALT allele, in the same order as listed
-    AC_beg = info.find("AC=")
-    AC_end = info.find(";", AC_beg)
-    AC_list = (info[AC_beg + 3:AC_end]).split(",")
+    AC_beg = info.find('AC=')
+    AC_end = info.find(';', AC_beg)
+    AC_list = (info[AC_beg + 3:AC_end]).split(',')
 
     # AC_adjusted = Adjusted Allele Count
-    AC_adj_beg = info.find("AC_Adj=")
-    AC_adj_end = info.find(";", AC_adj_beg)
-    AC_adj_list = (info[AC_adj_beg + 7:AC_adj_end]).split(",")
+    AC_adj_beg = info.find('AC_Adj=')
+    AC_adj_end = info.find(';', AC_adj_beg)
+    AC_adj_list = (info[AC_adj_beg + 7:AC_adj_end]).split(',')
 
     # AF = allele frequency for each ALT allele in the same order as listed (use this when estimated from primary data,
     # not called genotypes)
-    AF_beg = info.find("AF=")
-    AF_end = info.find(";", AF_beg)
-    AF_list = (info[AF_beg + 3:AF_end]).split(",")
+    AF_beg = info.find('AF=')
+    AF_end = info.find(';', AF_beg)
+    AF_list = (info[AF_beg + 3:AF_end]).split(',')
 
     # AN = total number of alleles in called genotypes
-    AN_beg = info.find("AN=")
-    AN_end = info.find(";", AN_beg)
+    AN_beg = info.find('AN=')
+    AN_end = info.find(';', AN_beg)
     d['AN'].append(info[AN_beg + 3:AN_end])
 
     # AN_adj = Adjusted Allele Number
-    AN_adj_beg = info.find("AN_Adj=")
-    AN_adj_end = info.find(";", AN_adj_beg)
+    AN_adj_beg = info.find('AN_Adj=')
+    AN_adj_end = info.find(';', AN_adj_beg)
     d['AN_ADJ'].append(info[AN_adj_beg + 7:AN_adj_end])
 
     # DP = combined depth across samples, e.g. DP=154
-    DP_beg = info.find("DP=")
-    DP_end = info.find(";", DP_beg)
+    DP_beg = info.find('DP=')
+    DP_end = info.find(';', DP_beg)
     d['DP'].append(info[DP_beg + 3:DP_end])
 
     return AC_list, AC_adj_list, AF_list
@@ -114,7 +114,7 @@ if __name__ == '__main__':
 
             for line_no, line in enumerate(vcf_file):
 
-                if line.startswith("##INFO="):
+                if line.startswith('##INFO='):
                     line = line[7:].strip().lstrip('<').rstrip('>')
                     _id, _desc = re.match(r'ID=(\w+),.*Description=\"(.*)\"', line).groups()
                     info_list.append({'ID': _id, 'Description': _desc})
@@ -126,7 +126,7 @@ if __name__ == '__main__':
 
                 if info_list and not CSQ_I:
                     # Converting INFO entries to a DataFrame for ease of use, but not saving yet
-                    info_df = pd.DataFrame(info_list).set_index("ID")
+                    info_df = pd.DataFrame(info_list).set_index('ID')
                     assert 'CSQ' in info_df.index, \
                         'CSQ key not found in INFO. Regenerate .vcf using --vcf_info_field CSQ'
                     try:
@@ -137,7 +137,7 @@ if __name__ == '__main__':
                     except (IndexError, ValueError):
                         raise RuntimeError('Unable to determine CSQ positions for desired CSQ fields')
 
-                line_parts = line.split("\t")
+                line_parts = line.split('\t')
 
                 if line_parts[CHROM] != chromosome:
                     if d:
@@ -151,34 +151,31 @@ if __name__ == '__main__':
                         if _start <= pos <= _end:
                             continue
 
-                alt_list = line_parts[ALT].split(",")
+                alt_list = line_parts[ALT].split(',')
                 info = line_parts[INFO]
 
-                CSQ_start = info.find("CSQ=")
+                CSQ_start = info.find('CSQ=')
                 if CSQ_start == -1:
                     fill_empty_fields(line_parts, alt_list, d)
                 else:
-                    try:
-                        CSQ_end = info.index(';', CSQ_start)
-                    except ValueError:
+                    CSQ_end = info.find(';', CSQ_start)
+                    if CSQ_end == -1:
                         CSQ_end = None
-
-                    CSQ_data = info[CSQ_start + 4: CSQ_end]
-                    CSQ_features = CSQ_data.split(",")
+                    CSQ_features = info[CSQ_start + 4: CSQ_end].split(',')
 
                     for CSQ in CSQ_features:
                         CSQ_PARTS = CSQ.split('|')
                         # Update the main fields for each CSQ feature (so each CSQ will appear in a different line)
                         AC_list, AC_adj_list, AF_list = update_main_fields(line_parts, d)
 
-                        # Allele_num for deciding which alt, AC and AF to add - 1-indexed
-                        allele_num = int(CSQ_PARTS[CSQ_I['ALLELE_NUM']])
-                        assert allele_num > 0, 'Unexpected Condition'
+                        # Allele_num for deciding which alt, AC and AF to add - 1-indexed in .vcf file
+                        allele_num = int(CSQ_PARTS[CSQ_I['ALLELE_NUM']]) - 1
+                        assert allele_num >= 0, 'Unexpected Condition'
 
-                        d['ALT'].append(alt_list[allele_num - 1])
-                        d['AC'].append(AC_list[allele_num - 1])
-                        d['AC_ADJ'].append(AC_adj_list[allele_num - 1])
-                        d['AF'].append(AF_list[allele_num - 1])
+                        d['ALT'].append(alt_list[allele_num])
+                        d['AC'].append(AC_list[allele_num])
+                        d['AC_ADJ'].append(AC_adj_list[allele_num])
+                        d['AF'].append(AF_list[allele_num])
 
                         for k in CSQs:
                             d[k].append(CSQ_PARTS[CSQ_I[k]])
