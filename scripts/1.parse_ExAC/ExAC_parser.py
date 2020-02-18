@@ -158,7 +158,12 @@ if __name__ == '__main__':
                 if CSQ_start == -1:
                     fill_empty_fields(line_parts, alt_list, d)
                 else:
-                    CSQ_data = info[CSQ_start + 4:]
+                    try:
+                        CSQ_end = info.index(';', CSQ_start)
+                    except ValueError:
+                        CSQ_end = None
+
+                    CSQ_data = info[CSQ_start + 4: CSQ_end]
                     CSQ_features = CSQ_data.split(",")
 
                     for CSQ in CSQ_features:
