@@ -101,7 +101,7 @@ def fill_empty_fields(line_parts, alt_list, d):
 
 if __name__ == '__main__':
 
-    # The 0-indexed positions of these CSQs in the data - will be determined once we parse the metadata
+    # The 0-indexed positions of desired CSQs in the data - will be determined once we parse the metadata
     CSQ_I = {}
 
     _open = gzip.open if INPUT_FILE.endswith('.gz') else open
