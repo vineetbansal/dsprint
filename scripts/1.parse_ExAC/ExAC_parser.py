@@ -27,22 +27,23 @@ MULTI_ALLELIC_REGIONS = {
 
 REMOVE_MULTI_ALLELIC = True
 
-with open(os.path.join(os.path.dirname(dsprint.__file__), 'config.json')) as json_file:
-    config = json.load(json_file)['csq']
-
 try:
-    INPUT_FILE = snakemake.input[0]
-    OUTPUT_FILES = snakemake.output
-    WORK = [o.lstrip(config['output_prefix']).rstrip(config['output_suffix']) for o in OUTPUT_FILES]
+    snakemake
 except NameError:
     import sys
-    if len(sys.argv) < 2:
-        print('Usage: <script> <chromosome_number>')
+    if len(sys.argv) != 4:
+        print('Usage: <script> <input_file> <chromosome_number> <output_file>')
         sys.exit(0)
 
-    WORK = [sys.argv[1]]
-    INPUT_FILE = config['input_file']
-    OUTPUT_FILES = [f"{config['output_prefix']}{W}{config['output_suffix']}.csv" for W in WORK]
+    INPUT_FILE, CHROMOSOMES, OUTPUT_FILES = sys.argv[1:]
+    CHROMOSOMES, OUTPUT_FILES = [CHROMOSOMES], [OUTPUT_FILES]
+else:
+    INPUT_FILE = snakemake.input[0]
+    OUTPUT_FILES = snakemake.output
+
+    with open(os.path.join(os.path.dirname(dsprint.__file__), 'config.json')) as json_file:
+        config = json.load(json_file)['csq']
+    CHROMOSOMES = [o[len(config['output_prefix']):-len(config['output_suffix'])] for o in OUTPUT_FILES]
 
 
 def update_main_fields(line_parts, d):
@@ -100,13 +101,13 @@ def fill_empty_fields(line_parts, alt_list, d):
 
 if __name__ == '__main__':
 
-    CHROMOSOMES = WORK
-
     # The 0-indexed positions of these CSQs in the data - will be determined once we parse the metadata
     CSQ_I = {}
 
+    _open = gzip.open if INPUT_FILE.endswith('.gz') else open
+
     for chromosome, output_file in zip(CHROMOSOMES, OUTPUT_FILES):
-        with gzip.open(INPUT_FILE, 'rt') as vcf_file:
+        with _open(INPUT_FILE, 'rt') as vcf_file:
 
             info_list = []
             d = defaultdict(list)
