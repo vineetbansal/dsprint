@@ -178,19 +178,4 @@ if __name__ == '__main__':
                         for k in CSQs:
                             d[k].append(CSQ_PARTS[CSQ_I[k]])
 
-            df = pd.DataFrame(d)
-
-            # ----------------------------------------------------------
-            # Deterministic ordering of columns only needed for checksum
-            # This block should be removed after output files are validated against the golden files
-            old_columns = ["CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "AC", "AC_ADJ", "AF", "AN", "AN_ADJ",
-                           "DP", "GENE", "FEATURE", "FEATURE_TYPE", "CONSEQUENCE", "PROTEIN_POSITION", "AMINO_ACIDS",
-                           "CODONS", "STRAND", "ENSP", "SWISSPROT", "SIFT", "POLYPHEN", "EXON", "INTRON", "DOMAINS",
-                           "CLIN_SIG"]
-            df = df[old_columns]
-            new_columns = ["chrom", "pos", "id", "ref", "alt", "qual", "filter", "AC", "AC_Adj", "AF", "AN", "AN_Adj",
-                           "DP", "gene", "feature", "feature_type", "conseq", "prot_pos", "amino_acids", "codons",
-                           "strand", "ENSP", "SWISSPROT", "SIFT", "PolyPhen", "exon", "intron", "domains", "clin_sig"]
-            df.rename(columns={k: v for k, v in zip(old_columns, new_columns)}, inplace=True)
-            # ----------------------------------------------------------
-            df.to_csv(output_file, sep='\t')
+            pd.DataFrame(d).to_csv(output_file, sep='\t')
