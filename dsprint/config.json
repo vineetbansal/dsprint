@@ -1,7 +1,13 @@
 {
+  "pfam": {
+    "32": "/home/vineetb/pfam/Pfam-A.hmm"
+  },
   "csq": {
     "input_file": "/media/vineetb/t5-vineetb/dsprint/ExAC.r0.3.sites.vep.vcf.gz",
     "output_prefix": "/media/vineetb/t5-vineetb/dsprint/out/parsed-chrom_",
     "output_suffix": ".csv"
+  },
+  "parse_pfam": {
+    "output_folder": "/media/vineetb/t5-vineetb/dsprint"
   }
 }
