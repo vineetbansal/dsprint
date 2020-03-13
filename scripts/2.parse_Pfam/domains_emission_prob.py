@@ -1,85 +1,58 @@
 import gzip
-import json
-import os.path
 import pickle
 from collections import defaultdict
 import numpy as np
-import dsprint
 
-EOF = '//'
+try:
+    snakemake
+except NameError:
+    import sys
+    if len(sys.argv) != 4:
+        print('Usage: <script> <pfam_hmm_file> <domains_log_prob_pik> <domains_prob_pik>')
+        sys.exit(0)
+
+    INPUT_FILE, DOMAINS_LOG_PROB_FILE, DOMAINS_PROB_FILE = sys.argv[1:]
+else:
+    INPUT_FILE = snakemake.input[0]
+    DOMAINS_LOG_PROB_FILE = snakemake.output[0]
+    DOMAINS_PROB_FILE = snakemake.output[1]
+
 
 if __name__ == '__main__':
 
-    with open(os.path.join(os.path.dirname(dsprint.__file__), 'config.json')) as json_file:
-        config = json.load(json_file)
+    pfam_hmm_file = INPUT_FILE
+    _open = gzip.open if pfam_hmm_file.endswith('.gz') else open
 
-    output_folder = config['parse_pfam']['output_folder']
-    for pfam_version in config['pfam']:
+    d = {}
+    next_state = 0
+    domain_name = ''
+    log_prob_dict = defaultdict(list)
 
-        pfam_hmm_file = config['pfam'][pfam_version]
-        _open = gzip.open if pfam_hmm_file.endswith('.gz') else open
+    for line in _open(pfam_hmm_file, 'rt'):
+        parts = line.strip().split()
+        first = parts[0]
+        if first == 'NAME':
+            if domain_name:
+                d[domain_name] = log_prob_dict
+            domain_name = parts[1]
+            next_state = 0
+            log_prob_dict = defaultdict(list)
 
-        pfam_file = _open(pfam_hmm_file, 'rt')
+        if first == 'HMM':
+            n_states = len(parts) - 1
+            next_state = 1
 
-        # ----------TO FIX BELOW---------------
+        if next_state > 0 and first == str(next_state):
+            log_prob_dict[next_state] = [float(part) for part in parts[1:1 + n_states]]
+            next_state += 1
 
-        domains_hmm_dict = {}
-        print_flag = True
+    d[domain_name] = log_prob_dict
 
-        while print_flag:
-            print_flag = False
-            hmm_log_prob_dict = defaultdict(list)
-            for line in pfam_file:
-                print_flag = True
-                if line.startswith('NAME'):
-                    domain_name = line[6:-1]
-                if line.startswith('HMM '):
-                    aa = line.split()
-                    aa.remove('HMM')
-                    break
+    with open(DOMAINS_LOG_PROB_FILE, 'wb') as f:
+        pickle.dump(d, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-            states_cnt = 1
-            for line in pfam_file:
-                print_flag = True
-                line_list = line.split()
-                if line_list[0] == EOF:
-                    break
-                if line_list[0] == str(states_cnt):
-                    # Saving the probalities as a list for the corresponding HMM state
-                    prob_strs = line.split()[1:1 + len(aa)]
-                    for i in prob_strs:
-                        if i == "*":
-                            hmm_log_prob_dict[states_cnt].append(float('inf'))
-                        else:
-                            hmm_log_prob_dict[states_cnt].append(float(i))
-                    states_cnt += 1
+    for k, v in d.items():
+        d[k] = {_k: 1/np.exp(_v) for _k, _v in v.items()}
 
-            # Checking if its the end of the entire file
-            if len(hmm_log_prob_dict.keys()) == 0:
-                break
-            domains_hmm_dict[domain_name] = hmm_log_prob_dict
-
-        # Saving to file
-        with open("v_" + pfam_version + "_domains_hmm_dict.pik", 'wb') as handle:
-            pickle.dump(domains_hmm_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-        # Converting to probabilities, and saving a vector for each HMM match state
-        domains_hmm_prob_dict = {}
-        for domain_name in domains_hmm_dict.keys():
-            hmm_prob_dict = {}
-            for state in domains_hmm_dict[domain_name].keys():
-                hmm_prob_dict[state] = 1 / np.exp(domains_hmm_dict[domain_name][state])
-            domains_hmm_prob_dict[domain_name] = hmm_prob_dict
-
-        # Saving to file
-        with open("v_" + pfam_version + "_domains_hmm_prob_dict.pik", 'wb') as handle:
-            pickle.dump(domains_hmm_prob_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-        # Reading the dictionary of HMM probabilities
-        with open("v_" + pfam_version + "_domains_hmm_prob_dict.pik", 'rb') as handle:
-            domains_hmm_prob_dict = pickle.load(handle)
-
-        emission_prob = []
-        for domain in domains_hmm_prob_dict.keys():
-            for state in domains_hmm_prob_dict[domain]:
-                emission_prob.extend(domains_hmm_prob_dict[domain][state])
+    with open(DOMAINS_PROB_FILE, 'wb') as f:
+        pickle.dump(d, f, protocol=pickle.HIGHEST_PROTOCOL)

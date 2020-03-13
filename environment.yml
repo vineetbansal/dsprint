@@ -4,6 +4,7 @@ channels:
   - defaults
 
 dependencies:
+  - biopython
   - pip
   - python=3.7
   - pip:

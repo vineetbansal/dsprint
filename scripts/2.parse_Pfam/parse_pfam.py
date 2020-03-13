@@ -1,33 +1,35 @@
 import gzip
-import json
-import os.path
 import pandas as pd
-import dsprint
 
 # Fields that we are interested in - for multiple valued fields (e.g. GA), the first component is extracted
-FIELDS = ('NAME', 'LENG', 'GA')
+FIELDS = 'NAME', 'LENG', 'GA'
+
+try:
+    snakemake
+except NameError:
+    import sys
+    if len(sys.argv) != 3:
+        print('Usage: <script> <pfam_hmm_file> <output_csv_file>')
+        sys.exit(0)
+
+    INPUT_FILE, OUTPUT_FILE = sys.argv[1:]
+else:
+    INPUT_FILE = snakemake.input[0]
+    OUTPUT_FILE = snakemake.output[0]
 
 
 if __name__ == '__main__':
 
-    with open(os.path.join(os.path.dirname(dsprint.__file__), 'config.json')) as json_file:
-        config = json.load(json_file)
+    pfam_hmm_file = INPUT_FILE
+    _open = gzip.open if pfam_hmm_file.endswith('.gz') else open
 
-    output_folder = config['parse_pfam']['output_folder']
-    for pfam_version in config['pfam']:
+    d = {k: [] for k in FIELDS}
+    for line in _open(pfam_hmm_file, 'rt'):
+        parts = line.strip().split()
+        first = parts[0]
+        if first in FIELDS:
+            d[first].append(parts[1])
 
-        pfam_hmm_file = config['pfam'][pfam_version]
-        _open = gzip.open if pfam_hmm_file.endswith('.gz') else open
-
-        pfam_file = _open(pfam_hmm_file, 'rt')
-
-        d = {k: [] for k in FIELDS}
-        for line in pfam_file:
-            parts = line.strip().split()
-            first = parts[0]
-            if first in FIELDS:
-                d[first].append(parts[1])
-
-        pd.DataFrame(d).to_csv(os.path.join(output_folder, f'pfam_{pfam_version}_data.csv'), sep='\t')
+    pd.DataFrame(d).set_index('NAME').to_csv(OUTPUT_FILE, sep='\t')
 
 
