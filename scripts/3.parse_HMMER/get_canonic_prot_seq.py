@@ -6,16 +6,12 @@ import math
 from collections import defaultdict
 import pickle
 import sys
+import glob
 import subprocess
 
 import dsprint
 from dsprint.calc_exac_freq_func import codon_table, retrieve_codon_seq
 from dsprint.mapping_func import create_exon_pos_table
-
-curr_dir = '.'
-pfam_version = "32"
-domains_th = "10"
-TEST_PROCCESSED_DOMAINS = False
 
 
 def reverse_complement(seq):
@@ -83,49 +79,43 @@ def exons_translate_to_prot(exon_table, chrom_raw_data, chrom):
     return protein_str
 
 
+curr_dir = '.'
+pfam_version = "32"
+domains_th = "10"
+TEST_PROCCESSED_DOMAINS = False
+
+
+try:
+    snakemake
+except NameError:
+    import sys
+    if len(sys.argv) != 2:
+        print('Usage: <script> <hmmer_results_folder>')
+        sys.exit(0)
+
+    HMMS_FOLDER , = sys.argv[1:]
+else:
+    HMMS_FOLDER = snakemake.input[0]
+
+
 if __name__ == '__main__':
 
-    with open(os.path.join(os.path.dirname(dsprint.__file__), 'config.json')) as json_file:
-        config = json.load(json_file)
-
-    # Read the list of domains
     if TEST_PROCCESSED_DOMAINS:
-        with open(curr_dir[0] + "/../13.Process_domains_not_in_training/processed_domains_not_in_pipeline_final_list.pik",
-                  'rb') as handle:
-            filtered_domains_list = pickle.load(handle)
-    else:
-        if pfam_version == "32":
-            with open(config['pfam'][pfam_version]['human_domains_list'], 'rb') as handle:
-                filtered_domains_list = pickle.load(handle)
-        else:
-            with open(curr_dir[0] + "/../5.domains_stats/pfam-v" + pfam_version + "/filtered" + domains_th + "_list.pik",
-                      'rb') as handle:
-                filtered_domains_list = pickle.load(handle)
-    filtered_domains_list.sort()
+        raise NotImplementedError
 
-    # Read the substitutions table (for the exons translation)
-    # with open("/home/anat/Research/ExAC/9.Features_exploration/codon_ns_table.pik", 'rb') as handle:
-    #     codon_ns_table = pickle.load(handle)
-
-    chromosome_names = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18",
-                        "19", "20", "21", "22", "X", "Y"]
-    len(filtered_domains_list)
-
+    chromosome_names = [str(i) for i in range(1, 23)] + ['X', 'Y']
     gene_dict = defaultdict(dict)
 
-    for domain_name in filtered_domains_list:
+    for domain_file in glob.glob(HMMS_FOLDER + '/*.csv'):
 
-        in_path = curr_dir[0] + "/hmm_domains/pfam-v" + pfam_version + "/"
-        filename = domain_name + ".csv"
-        domain_data = pd.read_csv(in_path + filename, sep='\t', index_col=0, dtype={"chrom_num": str})
+        domain = os.path.splitext(os.path.basename(domain_file))[0]
+        domain_data = pd.read_csv(domain_file, sep='\t', index_col=0, dtype={"chrom_num": str})
 
-        # Sort the domain data
         sorted_domain_data = domain_data.sort_values(by=["chrom_num", "gene", "TargetStart"])
         sorted_domain_data = sorted_domain_data.reset_index(drop=True)
 
         # Get the canonic protein ids file for the domain
-        with open(curr_dir[
-                      0] + "/../4.parse_Uniprot/domains_canonic_prot/pfam-v" + pfam_version + "/" + domain_name + "_canonic_prot.pik",
+        with open("4.parse_Uniprot/domains_canonic_prot/pfam-32/" + domain + "_canonic_prot.pik",
                   'rb') as handle:
             canonic_protein = pickle.load(handle)
 
@@ -159,7 +149,7 @@ if __name__ == '__main__':
             prot_seq = exons_translate_to_prot(exon_table, chrom_raw_data, chrom)
             gene_dict[gene][prot_id] = prot_seq
 
-        print("Finished domain " + str(domain_name))
+        print("Finished domain " + str(domain))
 
     # Saving one dictionary for all the domains together
     if TEST_PROCCESSED_DOMAINS:
