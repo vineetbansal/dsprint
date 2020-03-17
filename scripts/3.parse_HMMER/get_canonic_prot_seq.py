@@ -1,101 +1,54 @@
 import pandas as pd
 import os.path
-import json
-import numpy as np
-import math
 from collections import defaultdict
 import pickle
-import sys
 import glob
 import subprocess
 
-import dsprint
-from dsprint.calc_exac_freq_func import codon_table, retrieve_codon_seq
+from Bio.Seq import Seq
+from Bio.Alphabet import generic_dna
+
 from dsprint.mapping_func import create_exon_pos_table
 
 
-def reverse_complement(seq):
-    """
-    Given a DNA sequence, return the reverse-complement of that sequence.
-    """
+def retrieve_exon_seq(exon_start, exon_end, chrom, hg19_file, reverse_complement=False):
+    # index conversion for twoBitToFa
+    # start, 1-indexed inclusive -> 0-indexed inclusive, subtract 1
+    # end, 1-indexed inclusive -> 0-indexed exclusive, unchanged
+    exon_start = int(exon_start) - 1
 
-    # Complement strand - transversing the bp to base-complement
-    complement_seq = []
-    for c in seq:
-        if c.upper() == 'A':
-            complement_seq.append('T')
-        elif c.upper() == 'T':
-            complement_seq.append('A')
-        elif c.upper() == 'G':
-            complement_seq.append('C')
-        else:
-            complement_seq.append('G')
+    seq = subprocess.check_output(
+        f'twoBitToFa {hg19_file} stdout -seq=chr{chrom} -start={exon_start} -end={exon_end}',
+        shell=True
+    )
+    # Remove 1st line, whitespaces and newlines
+    seq = ''.join(seq.decode('ascii').split()[1:]).upper()
 
-    # Reversing the sequence
-    comp_seq = ''.join(complement_seq)
-    rev_comp_seq = comp_seq[::-1]
-
-    return rev_comp_seq
+    if reverse_complement:
+        d = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
+        return ''.join([d[x] for x in seq])[::-1]
+    else:
+        return seq
 
 
-def retrieve_exon_seq(exon_start, exon_end, chrom):
-    """
-    Retrieve the exon sequence from the ref sequence, according to exons start and end positions
-    """
-    chromsome_name = "chr" + chrom
-    seq_start = int(exon_start) - 1
-
-    # Calling hg19.2bit to retreive the DNA sequence
-    query = subprocess.check_output(
-        "../5.HMM_alter_align/twoBitToFa ../5.HMM_alter_align/hg19.2bit stdout -seq=%s -start=%s -end=%s" % (
-        chromsome_name, str(seq_start), str(exon_end)), shell=True)
-    query = ''.join(query.split()[1:])  # Remove 1st line, whitespaces and newlines
-
-    return query.upper()
-
-
-def exons_translate_to_prot(exon_table, chrom_raw_data, chrom):
-    dna_seq = ""
-
-    # Get all the exons dna sequence
-    for index, exon in exon_table.iterrows():
-        exon_seq = retrieve_exon_seq(exon["start_pos"], exon["end_pos"], chrom)
-
-        if chrom_raw_data.find("complement") >= 0:
-            exon_seq = reverse_complement(exon_seq)
-
-        dna_seq = dna_seq + exon_seq
-
-    # Translate to protein sequence
-    prot_seq = []
-    next_codon_idx = 0
-    while (next_codon_idx + 2 < len(dna_seq)):
-        codon = dna_seq[next_codon_idx:next_codon_idx + 3]
-        prot_seq.append(codon_table[codon])
-        next_codon_idx += 3
-
-    # Convert all codons to one amino acids string
-    protein_str = ''.join(prot_seq)
-    return protein_str
-
-
-curr_dir = '.'
-pfam_version = "32"
-domains_th = "10"
 TEST_PROCCESSED_DOMAINS = False
-
 
 try:
     snakemake
 except NameError:
     import sys
-    if len(sys.argv) != 2:
-        print('Usage: <script> <hmmer_results_folder>')
+    if len(sys.argv) != 7:
+        print('Usage: <script> <hmmer_results_folder> <canonic_protein_folder> <exon_seq_folder> <hg19_2bit_file> <frameshift_file> <output_file>')
         sys.exit(0)
 
-    HMMS_FOLDER , = sys.argv[1:]
+    HMMS_FOLDER, CANONIC_PROT_FOLDER, EXON_SEQ_FOLDER, HG19_FILE, FRAMESHIFT_FILE, OUTPUT_FILE = sys.argv[1:]
 else:
     HMMS_FOLDER = snakemake.input[0]
+    CANONIC_PROT_FOLDER = snakemake.input[1]
+    EXON_SEQ_FOLDER = snakemake.input[2]
+    HG19_FILE = snakemake.input[3]
+    FRAMESHIFT_FILE = snakemake.input[4]
+    OUTPUT_FILE = snakemake.output[0]
 
 
 if __name__ == '__main__':
@@ -109,54 +62,39 @@ if __name__ == '__main__':
     for domain_file in glob.glob(HMMS_FOLDER + '/*.csv'):
 
         domain = os.path.splitext(os.path.basename(domain_file))[0]
+        print(domain)
         domain_data = pd.read_csv(domain_file, sep='\t', index_col=0, dtype={"chrom_num": str})
 
-        sorted_domain_data = domain_data.sort_values(by=["chrom_num", "gene", "TargetStart"])
-        sorted_domain_data = sorted_domain_data.reset_index(drop=True)
+        with open(os.path.join(CANONIC_PROT_FOLDER, domain + "_canonic_prot.pik"), 'rb') as f:
+            canonic_protein = pickle.load(f)
 
-        # Get the canonic protein ids file for the domain
-        with open("4.parse_Uniprot/domains_canonic_prot/pfam-32/" + domain + "_canonic_prot.pik",
-                  'rb') as handle:
-            canonic_protein = pickle.load(handle)
-
-        for gene in sorted_domain_data["gene"].unique():
+        for gene, _domain_data in domain_data.groupby('gene'):
 
             prot_id = canonic_protein[gene]
             if gene in gene_dict and prot_id in gene_dict[gene]:
                 continue
 
-            # Get the exons sequence file for the protein
-            chrom = sorted_domain_data[sorted_domain_data["gene"] == gene]["chrom_num"].unique()[0]
+            chrom = _domain_data['chrom_num'].unique()[0]
             if chrom not in chromosome_names:
                 continue
 
-            exons_file = pd.read_csv(
-                curr_dir[0] + "/from_shilpa/exons_seqs/" + chrom + "/" + gene + "/" + prot_id + ".exons.txt", skiprows=1,
-                header=None, names=["pos", "exon_seq"], sep='\t')
-
-            # Get the chrom raw data
-            chrom_raw_data = \
-            sorted_domain_data[sorted_domain_data["gene"] == gene][sorted_domain_data["#TargetID"] == prot_id][
-                "chromosome"].unique()  # there should be only one element here
-            if len(chrom_raw_data) > 1:
+            chromosome = _domain_data[_domain_data["#TargetID"] == prot_id]['chromosome'].unique()
+            if len(chromosome) > 1:
                 print(" Error: " + gene + ": more than one chromosome raw data")  # sanity check
-            chrom_raw_data = chrom_raw_data[0]
+            chromosome = chromosome[0]
 
-            # Create exons table
-            exon_table = create_exon_pos_table(chrom_raw_data, prot_id)  # exons frameshifts are also fixed here!
+            exon_table = create_exon_pos_table(chromosome, prot_id, FRAMESHIFT_FILE)
+            dna_seq = ''.join([
+                retrieve_exon_seq(row["start_pos"], row["end_pos"], chrom, HG19_FILE,
+                                  reverse_complement=chromosome.find('complement') >= 0)
+                for _, row in exon_table.iterrows()
+            ])
 
-            # Translate all the exons dna sequences to one protein sequence
-            prot_seq = exons_translate_to_prot(exon_table, chrom_raw_data, chrom)
-            gene_dict[gene][prot_id] = prot_seq
-
-        print("Finished domain " + str(domain))
+            gene_dict[gene][prot_id] = str(Seq(dna_seq, generic_dna).translate())
 
     # Saving one dictionary for all the domains together
     if TEST_PROCCESSED_DOMAINS:
-        with open(curr_dir[0] + "/canonic_prot_seq/pfam-v" + pfam_version + "/processed_domains_genes_prot_seq.pik", 'wb') as handle:
-            pickle.dump(gene_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        raise NotImplementedError
     else:
-        with open(curr_dir[0] + "/canonic_prot_seq/pfam-v" + pfam_version + "/all_domains_genes_prot_seq.pik",
-                  'wb') as handle:
-            pickle.dump(gene_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
+        with open(OUTPUT_FILE, 'wb') as f:
+            pickle.dump(gene_dict, f, protocol=pickle.HIGHEST_PROTOCOL)

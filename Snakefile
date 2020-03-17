@@ -48,7 +48,7 @@ rule emission_prob:
     script: "scripts/2.parse_Pfam/domains_emission_prob.py"
 
 rule exon_frameshifts:
-    input: f"{config['input_dir']}/{config['exon_frameshifts']['input_folder']}"
+    input: f"{config['input_dir']}/exons_seqs"
     output: f"{config['output_dir']}/exons_index_length.pik"
     script: "scripts/3.parse_HMMER/exons_frameshifts.py"
 
@@ -67,3 +67,13 @@ rule _get_domain_hmm:
 
 rule get_domain_hmm:
     input: dynamic(expand(f"{config['output_dir']}/pfam/{{pfam_version}}/hmms/{{hmm}}.csv", pfam_version=PFAM_VERSIONS, hmm='{hmm}'))
+
+rule canonic_prot_seq:
+    input:
+        expand(f"{config['output_dir']}/pfam/{{pfam_version}}/hmms", pfam_version=PFAM_VERSIONS),
+        expand(f"{config['output_dir']}/pfam/{{pfam_version}}/domains_canonic_prot", pfam_version=PFAM_VERSIONS),
+        f"{config['input_dir']}/exons_seqs",
+        f"{config['input_dir']}/hg19.2bit",
+        f"{config['output_dir']}/exons_index_length.pik"
+    output: expand(f"{config['output_dir']}/pfam/{{pfam_version}}/all_domains_genes_prot_seq.pik", pfam_version=PFAM_VERSIONS)
+    script: "scripts/3.parse_HMMER/get_canonic_prot_seq.py"

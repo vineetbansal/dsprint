@@ -4,7 +4,7 @@ import pickle
 import math
 
 
-def correct_exons_frameshift(exon_df, targetid):
+def correct_exons_frameshift(exon_df, targetid, frameshift_file):
     """
     Correct the exons end/start positions if there's a frameshift.
     Frameshift are extracted from Shilpa's exons sequences.
@@ -12,13 +12,11 @@ def correct_exons_frameshift(exon_df, targetid):
     """
 
     # Get the frameshifts index and length of the exons
-    with open("/home/anat/Research/ExAC/3.parse_HMMER/domains_frameshifts/exons_index_length.pik", 'rb') as handle:
-        exons_frameshifts = pickle.load(handle)
+    with open(frameshift_file, 'rb') as f:
+        exons_frameshifts = pickle.load(f)
 
     for frameshift in exons_frameshifts[targetid + ".exons.txt"]:
-        idx = frameshift[0]
-        length = frameshift[1]
-        bps = frameshift[2]
+        idx, length, _ = frameshift
 
         # Find the exon we need to add bps to
         first_bp_count = 1
@@ -28,30 +26,30 @@ def correct_exons_frameshift(exon_df, targetid):
             exon_len = (ex_end - ex_start + 1)
 
             # Fixing start pos of the exon
-            if (idx <= first_bp_count):
-                exon_df.set_value(index, "start_pos", (ex_start - length))
+            if idx <= first_bp_count:
+                exon_df.loc[index].start_pos = ex_start - length
                 break
             # Fixing end pos of the exon
-            elif (idx <= (first_bp_count + exon_len)):
-                exon_df.set_value(index, "end_pos", (ex_end + length))
+            elif idx <= (first_bp_count + exon_len):
+                exon_df.loc[index].end_pos = ex_end + length
                 break
             first_bp_count += exon_len
 
 
 # -------------------------------------------------------------------------------------------#
 
-def create_exon_pos_table(chrom_raw, targetid):
+def create_exon_pos_table(chrom_raw, targetid, frameshift_file):
     """
     A function that get chromosome raw data from the hmmer results and return a data-frame of the exons.
     """
     exons_raw = chrom_raw
 
     # Removing the complement bracates if exist
-    if (exons_raw.find("complement(") >= 0):
+    if exons_raw.find("complement(") >= 0:
         exons_raw = exons_raw[exons_raw.find("complement(") + 11:-1]
 
     # Removing the join bracates if exist
-    if (exons_raw.find("join(") >= 0):
+    if exons_raw.find("join(") >= 0:
         exons_raw = exons_raw[exons_raw.find("join(") + 5:-1]
 
     # In case there's only one exon, take everything after the second ":"
@@ -63,7 +61,7 @@ def create_exon_pos_table(chrom_raw, targetid):
     frameshift_flag = False
     for ex in exons_list:
         # flag cases where Shilpa added "-" to a position number to signify frameshift in the sequences
-        if (ex[0] == "-"):
+        if ex[0] == "-":
             frameshift_flag = True
             continue
 
@@ -75,8 +73,8 @@ def create_exon_pos_table(chrom_raw, targetid):
     exon_df.columns = ["start_pos", "end_pos"]
 
     # Correct frameshift if frameshift exist
-    if (frameshift_flag):
-        correct_exons_frameshift(exon_df, targetid)
+    if frameshift_flag:
+        correct_exons_frameshift(exon_df, targetid, frameshift_file)
 
     exon_len = []
     for index, exon in exon_df.iterrows():
@@ -88,7 +86,7 @@ def create_exon_pos_table(chrom_raw, targetid):
         first_bp_list.append(first_bp_count)
         first_bp_count += int(exon[2])
     exon_df["first_bp_count"] = first_bp_list
-    return (exon_df)
+    return exon_df
 
 
 # -------------------------------------------------------------------------------------------#

@@ -9,9 +9,5 @@
     "output_suffix": ".csv"
   },
 
-  "exon_frameshifts": {
-    "input_folder": "exons_seqs"
-  },
-
   "scratch": "/media/vineetb/t5-vineetb/dsprint/scratch"
 }
