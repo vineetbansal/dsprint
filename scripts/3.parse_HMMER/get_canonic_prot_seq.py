@@ -25,36 +25,29 @@ def retrieve_exon_seq(exon_start, exon_end, chrom, hg19_file, reverse_complement
     seq = ''.join(seq.decode('ascii').split()[1:]).upper()
 
     if reverse_complement:
-        d = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
-        return ''.join([d[x] for x in seq])[::-1]
+        return str(Seq(seq, generic_dna).reverse_complement())
     else:
         return seq
 
-
-TEST_PROCCESSED_DOMAINS = False
 
 try:
     snakemake
 except NameError:
     import sys
-    if len(sys.argv) != 7:
-        print('Usage: <script> <hmmer_results_folder> <canonic_protein_folder> <exon_seq_folder> <hg19_2bit_file> <frameshift_file> <output_file>')
+    if len(sys.argv) != 6:
+        print('Usage: <script> <hmmer_results_folder> <canonic_protein_folder> <hg19_2bit_file> <frameshift_file> <output_file>')
         sys.exit(0)
 
-    HMMS_FOLDER, CANONIC_PROT_FOLDER, EXON_SEQ_FOLDER, HG19_FILE, FRAMESHIFT_FILE, OUTPUT_FILE = sys.argv[1:]
+    HMMS_FOLDER, CANONIC_PROT_FOLDER, HG19_FILE, FRAMESHIFT_FILE, OUTPUT_FILE = sys.argv[1:]
 else:
     HMMS_FOLDER = snakemake.input[0]
     CANONIC_PROT_FOLDER = snakemake.input[1]
-    EXON_SEQ_FOLDER = snakemake.input[2]
-    HG19_FILE = snakemake.input[3]
-    FRAMESHIFT_FILE = snakemake.input[4]
+    HG19_FILE = snakemake.input[2]
+    FRAMESHIFT_FILE = snakemake.input[3]
     OUTPUT_FILE = snakemake.output[0]
 
 
 if __name__ == '__main__':
-
-    if TEST_PROCCESSED_DOMAINS:
-        raise NotImplementedError
 
     chromosome_names = [str(i) for i in range(1, 23)] + ['X', 'Y']
     gene_dict = defaultdict(dict)
@@ -92,9 +85,5 @@ if __name__ == '__main__':
 
             gene_dict[gene][prot_id] = str(Seq(dna_seq, generic_dna).translate())
 
-    # Saving one dictionary for all the domains together
-    if TEST_PROCCESSED_DOMAINS:
-        raise NotImplementedError
-    else:
-        with open(OUTPUT_FILE, 'wb') as f:
-            pickle.dump(gene_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
+    with open(OUTPUT_FILE, 'wb') as f:
+        pickle.dump(gene_dict, f, protocol=pickle.HIGHEST_PROTOCOL)

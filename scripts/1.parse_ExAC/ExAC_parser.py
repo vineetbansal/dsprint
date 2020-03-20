@@ -43,7 +43,7 @@ else:
 
     with open(os.path.join(os.path.dirname(dsprint.__file__), 'config.json')) as json_file:
         config = json.load(json_file)['csq']
-    CHROMOSOMES = [o[len(config['output_prefix']):-len(config['output_suffix'])] for o in OUTPUT_FILES]
+    CHROMOSOMES = [os.path.basename(o)[len(config['output_prefix']):-len(config['output_suffix'])] for o in OUTPUT_FILES]
 
 
 def update_main_fields(line_parts, d):

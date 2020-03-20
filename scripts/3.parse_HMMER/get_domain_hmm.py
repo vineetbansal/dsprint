@@ -47,8 +47,8 @@ def domain_conserved_states_filter(domain_data, domain_hmm_prob, con_threshold):
 
         # Iterating over all domain instances and check the conserved states
         for index, row in domain_data.iterrows():
-            target_seq = list(row["Target_Seq"])
-            hmm_pos = (row["HMM_Pos"]).split(",")
+            target_seq = list(row['Target_Seq'])
+            hmm_pos = (row['HMM_Pos']).split(',')
             add_flag = True
             for con_state in con_states_dict.keys():
                 try:
@@ -89,7 +89,7 @@ if __name__ == '__main__':
 
         domain_details = pfam_df.loc[domain]
         _df = _df[_df['BitScore'] >= domain_details.GA]
-        _df = _df[(_df["HMMStart"] == 1) & (_df['HMMEnd'] == int(domain_details.LENG))]
+        _df = _df[(_df['HMMStart'] == 1) & (_df['HMMEnd'] == int(domain_details.LENG))]
 
         domain_hmm_prob = domains_hmm_prob_dict[domain]
         _df = domain_conserved_states_filter(_df, domain_hmm_prob, con_threshold)

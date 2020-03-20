@@ -40,7 +40,6 @@ if __name__ == '__main__':
 
     domains_files = glob.glob(HMMS_FOLDER + '/*.csv')
 
-    # TODO: Is the 6393 in the notebook an experiment?
     for dom_filename in domains_files:
 
         domain = os.path.splitext(os.path.basename(dom_filename))[0]

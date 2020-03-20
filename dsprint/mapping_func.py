@@ -104,11 +104,11 @@ def find_protein_pos(chrom_pos, exon_df, chrom_raw):
         first_bp_count = int(exon[3])
 
         # If the chrom position is inside this exon
-        if (chrom_pos >= start_pos and chrom_pos <= end_pos):
+        if chrom_pos >= start_pos and chrom_pos <= end_pos:
 
             # Calculate position for reverse complement strand:
             # the protein is translated from the end position towards the start position of the exon
-            if (chrom_raw.find("complement") >= 0):
+            if chrom_raw.find("complement") >= 0:
                 len_from_exon_start = end_pos - chrom_pos
             # Calculate position for forward strand
             else:
@@ -144,7 +144,7 @@ def find_chrom_bps(protein_pos, exon_table, chrom_raw_data):
         last_bp_count = first_bp_count + exon_length - 1
 
         # Checking if the transcript position is within this exon
-        if (first_bp_count <= transcript_pos and transcript_pos <= last_bp_count):
+        if first_bp_count <= transcript_pos and transcript_pos <= last_bp_count:
 
             start_pos = int(exon["start_pos"])
             end_pos = int(exon["end_pos"])
@@ -153,12 +153,12 @@ def find_chrom_bps(protein_pos, exon_table, chrom_raw_data):
 
             # Calculate bps position for reverse complement strand:
             # the protein is translated from the end position towards the start position of the exon
-            if (chrom_raw_data.find("complement") >= 0):
+            if chrom_raw_data.find("complement") >= 0:
                 chrom_pos_1st = end_pos - len_from_exon_start
 
                 chrom_pos_2nd = chrom_pos_1st - 1
                 # If the exons end here: move to the next exon
-                if (chrom_pos_2nd < start_pos):
+                if chrom_pos_2nd < start_pos:
                     index += 1
                     chrom_pos_2nd = int(exon_table["end_pos"][index])
                     start_pos = int(exon_table["start_pos"][index])
@@ -166,7 +166,7 @@ def find_chrom_bps(protein_pos, exon_table, chrom_raw_data):
 
                 # If the exons ends here: move to the next exon
                 chrom_pos_3rd = chrom_pos_2nd - 1
-                if (chrom_pos_3rd < start_pos):
+                if chrom_pos_3rd < start_pos:
                     index += 1
                     chrom_pos_3rd = int(exon_table["end_pos"][index])
 
@@ -176,7 +176,7 @@ def find_chrom_bps(protein_pos, exon_table, chrom_raw_data):
 
                 chrom_pos_2nd = chrom_pos_1st + 1
                 # If the exons end here: move to the next exon
-                if (chrom_pos_2nd > end_pos):
+                if chrom_pos_2nd > end_pos:
                     index += 1
                     chrom_pos_2nd = int(exon_table["start_pos"][index])
                     start_pos = int(exon_table["start_pos"][index])
@@ -184,11 +184,11 @@ def find_chrom_bps(protein_pos, exon_table, chrom_raw_data):
 
                 # If the exons end here: move to the next exon
                 chrom_pos_3rd = chrom_pos_2nd + 1
-                if (chrom_pos_3rd > end_pos):
+                if chrom_pos_3rd > end_pos:
                     index += 1
                     chrom_pos_3rd = int(exon_table["start_pos"][index])
 
-            return (chrom_pos_1st, chrom_pos_2nd, chrom_pos_3rd)
+            return chrom_pos_1st, chrom_pos_2nd, chrom_pos_3rd
 
 
 # -------------------------------------------------------------------------------------------#
@@ -216,7 +216,7 @@ def protein_pos_to_hmm_state_and_aa(protein_pos, domain_gene_table):
         aa = "-"
 
         # Check if the position is inside this domain instance of the gene
-        if (protein_pos >= target_start and protein_pos <= target_end):
+        if protein_pos >= target_start and protein_pos <= target_end:
 
             hmm_pos = (row["HMM_Pos"]).split(",")
             target_seq = list(row["Target_Seq"])
@@ -244,4 +244,4 @@ def protein_pos_to_hmm_state_and_aa(protein_pos, domain_gene_table):
             return (hmm_state, aa)
 
     # The protein position isn't in any domain region
-    return (-1, '-')
+    return -1, '-'
