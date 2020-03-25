@@ -40,11 +40,11 @@ except NameError:
 
     HMMS_FOLDER, CANONIC_PROT_FOLDER, HG19_FILE, FRAMESHIFT_FILE, OUTPUT_FILE = sys.argv[1:]
 else:
-    HMMS_FOLDER = snakemake.input[0]
-    CANONIC_PROT_FOLDER = snakemake.input[1]
-    HG19_FILE = snakemake.input[2]
-    FRAMESHIFT_FILE = snakemake.input[3]
-    OUTPUT_FILE = snakemake.output[0]
+    HMMS_FOLDER = snakemake.input.hmm_folder[0]
+    CANONIC_PROT_FOLDER = snakemake.input.canonic_prot_folder[0]
+    HG19_FILE = snakemake.input.hg19_file
+    FRAMESHIFT_FILE = snakemake.input.exon_len_file
+    OUTPUT_FILE = str(snakemake.output)
 
 
 if __name__ == '__main__':

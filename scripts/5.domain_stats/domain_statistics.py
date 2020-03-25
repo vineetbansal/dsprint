@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import pickle
+import glob
 
 
 def count_domain_instances(domain_gene_table, count_overlaps=True):
@@ -47,12 +48,12 @@ if __name__ == '__main__':
 
     domains_stats = {}
 
-    for dom_filename in os.listdir(HMMS_FOLDER):
-        print(dom_filename)
+    for dom_filename in glob.glob(HMMS_FOLDER + '/*.csv'):
+
         curr_domain_stats = []
 
-        domain_sym = dom_filename[:dom_filename.find(".")]
-        domain_data = pd.read_csv(os.path.join(HMMS_FOLDER, dom_filename), sep='\t', index_col=0)
+        domain_sym = os.path.splitext(os.path.basename(dom_filename))[0]
+        domain_data = pd.read_csv(dom_filename, sep='\t', index_col=0)
         domain_ens_genes = (domain_data["gene"]).unique()
 
         with open(os.path.join(CANONIC_PROT_FOLDER, domain_sym + '_canonic_prot.pik'), 'rb') as handle:
@@ -77,5 +78,5 @@ if __name__ == '__main__':
     domains_stats_df = pd.DataFrame.from_dict(domains_stats, orient='index')
     domains_stats_df.columns = ["genes", "instances"]
     domains_stats_df = domains_stats_df.sort_values(by=["instances", "genes"], ascending=[False, False])
-    domains_stats_df.to_csv(os.path.join(OUTPUT_FILE), sep='\t')
+    domains_stats_df.to_csv(OUTPUT_FILE, sep='\t')
 

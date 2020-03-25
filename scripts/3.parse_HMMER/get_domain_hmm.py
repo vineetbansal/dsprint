@@ -19,7 +19,7 @@ else:
     HMMER_RESULTS = snakemake.input[0]
     PFAM_DATA = snakemake.input[1]
     PROB_DICT = snakemake.input[2]
-    OUTPUT_FOLDER = os.path.dirname(snakemake.output[0])
+    OUTPUT_FOLDER = snakemake.output[0]
 
 
 def domain_conserved_states_filter(domain_data, domain_hmm_prob, con_threshold):
@@ -76,6 +76,9 @@ def domain_conserved_states_filter(domain_data, domain_hmm_prob, con_threshold):
 
 
 if __name__ == '__main__':
+
+    if not os.path.exists(OUTPUT_FOLDER):
+        os.mkdir(OUTPUT_FOLDER)
 
     allhmm = pd.read_csv(HMMER_RESULTS, sep='\t', index_col=0)
     pfam_df = pd.read_csv(PFAM_DATA, sep='\t', index_col=0)

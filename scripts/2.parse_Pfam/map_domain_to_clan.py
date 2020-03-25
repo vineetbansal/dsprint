@@ -17,6 +17,7 @@ else:
     PROTEOME_CSV = snakemake.input[1]
     OUTPUT_FOLDER = os.path.dirname(snakemake.output[0])
 
+
 if __name__ == '__main__':
     df = pd.read_csv(INPUT_FILE, sep='\t', header=None)
     df.columns = ['pfam_id', 'clan_id', 'clan_name', 'domain_name', 'description']

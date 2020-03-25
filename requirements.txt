@@ -1,3 +1,6 @@
 biomart
+jinja2
+networkx
 pandas
+pygments
 snakemake
