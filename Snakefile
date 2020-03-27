@@ -131,6 +131,7 @@ rule canonic_prot_seq:
 # -----------------------------------------------------------------------------
 # For each domain, find out how many genes, and how many instances of the
 # canonical protein id exist, and save in a table - domains_stats_df.csv
+# The dataframe is indexed on domain name
 # Note: not generating the following files
 #   human_domains_list.pik - all values taken by {hmm}
 #   domains_stats_dict.pik <domain_name>: (<no_of_genes>, <no_of_instances>) (same info as the df we save here)
