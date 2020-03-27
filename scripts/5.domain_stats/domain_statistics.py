@@ -39,9 +39,9 @@ except NameError:
 
     HMMS_FOLDER, CANONIC_PROT_FOLDER, OUTPUT_FILE = sys.argv[1:]
 else:
-    HMMS_FOLDER = snakemake.input[0]
-    CANONIC_PROT_FOLDER = snakemake.input[1]
-    OUTPUT_FILE = snakemake.output[0]
+    HMMS_FOLDER = snakemake.input.hmm_folder
+    CANONIC_PROT_FOLDER = snakemake.input.canonic_prot_folder
+    OUTPUT_FILE = str(snakemake.output[0])
 
 
 if __name__ == '__main__':

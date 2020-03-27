@@ -1,7 +1,7 @@
 {
   "input_dir": "/media/vineetb/t5-vineetb/dsprint/in",
   "output_dir": "/media/vineetb/t5-vineetb/dsprint/out",
-  "exac_file": "ExAC.r0.3.sites.vep.vcf.gz",
+  "exac_file": "ExAC.r0.3.sites.vep.vcf",
 
   "uniprot": {
     "fasta": "uniprot_sprot.fasta",

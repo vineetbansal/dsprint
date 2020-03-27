@@ -17,7 +17,7 @@ else:
     HMMS_FOLDER = snakemake.input[0]
     UNIPROT_FASTA_FILE = snakemake.input[1]
     UNIPROT_IDMAPPING_FILE = snakemake.input[2]
-    OUTPUT_FOLDER = os.path.dirname(snakemake.output[0])
+    OUTPUT_FOLDER = str(snakemake.output)
 
 
 def uniprot_canonical_lengths(uniprot_fasta_file, uniprot_idmapping_file):
@@ -44,6 +44,9 @@ def uniprot_canonical_lengths(uniprot_fasta_file, uniprot_idmapping_file):
 
 
 if __name__ == '__main__':
+
+    if not os.path.exists(OUTPUT_FOLDER):
+        os.mkdir(OUTPUT_FOLDER)
 
     UNIPROT = uniprot_canonical_lengths(UNIPROT_FASTA_FILE, UNIPROT_IDMAPPING_FILE)
     domains_files = glob.glob(HMMS_FOLDER + '/*.csv')

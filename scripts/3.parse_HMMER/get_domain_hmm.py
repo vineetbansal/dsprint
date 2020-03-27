@@ -19,7 +19,7 @@ else:
     HMMER_RESULTS = snakemake.input[0]
     PFAM_DATA = snakemake.input[1]
     PROB_DICT = snakemake.input[2]
-    OUTPUT_FOLDER = snakemake.output[0]
+    OUTPUT_FOLDER = str(snakemake.output)
 
 
 def domain_conserved_states_filter(domain_data, domain_hmm_prob, con_threshold):
