@@ -9,7 +9,7 @@ wildcard_constraints:
 
 rule all:
     input:
-        expand(f"{config['output_dir']}/csq/{config['csq']['output_prefix']}{{chromosome}}{config['csq']['output_suffix']}", chromosome=CHROMOSOMES),
+        expand(f"{config['output_dir']}/csq_filtered/parsed_filtered_chrom{{chromosome}}.csv", chromosome=CHROMOSOMES),
         expand(f"{config['output_dir']}/pfam/{{pfam_version}}/all_domains_genes_prot_seq.pik", pfam_version=PFAM_VERSIONS),
         expand(f"{config['output_dir']}/pfam/{{pfam_version}}/domains_sequences_dict.pik", pfam_version=PFAM_VERSIONS),
 
@@ -26,8 +26,17 @@ rule all:
 # -----------------------------------------------------------------------------
 rule csq:
     input: f"{config['input_dir']}/{config['exac_file']}"
-    output: f"{config['output_dir']}/csq/{config['csq']['output_prefix']}{{chromosome}}{config['csq']['output_suffix']}"
+    output: f"{config['output_dir']}/csq/parsed_chrom{{chromosome}}.csv"
     script: "scripts/1.parse_ExAC/ExAC_parser.py"
+
+# -----------------------------------------------------------------------------
+# Filter chromosome data based on mean coverage information from ExAC
+# -----------------------------------------------------------------------------
+rule csq_filter:
+    params: coverage_folder=f"{config['input_dir']}/{config['exac_coverage_folder']}"
+    input: f"{config['output_dir']}/csq/parsed_chrom{{chromosome}}.csv"
+    output: f"{config['output_dir']}/csq_filtered/parsed_filtered_chrom{{chromosome}}.csv"
+    script: "scripts/1.parse_ExAC/ExAC_filter_coverage.py"
 
 # -----------------------------------------------------------------------------
 # Parse pfam data and save useful information (domain_name, length,

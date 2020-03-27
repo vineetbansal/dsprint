@@ -1,6 +1,5 @@
 import os.path
 import re
-import json
 import gzip
 import pandas as pd
 from collections import defaultdict
@@ -40,10 +39,7 @@ except NameError:
 else:
     INPUT_FILE = snakemake.input[0]
     OUTPUT_FILES = snakemake.output
-
-    with open(os.path.join(os.path.dirname(dsprint.__file__), 'config.json')) as json_file:
-        config = json.load(json_file)['csq']
-    CHROMOSOMES = [os.path.basename(o)[len(config['output_prefix']):-len(config['output_suffix'])] for o in OUTPUT_FILES]
+    CHROMOSOMES = [os.path.splitext(os.path.basename(o)[len('parsed_chrom')])[0] for o in OUTPUT_FILES]
 
 
 def update_main_fields(line_parts, d):
