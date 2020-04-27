@@ -1,24 +1,49 @@
 configfile: "dsprint/config.json"
-threads: 4
+threads: 8
 
 PFAM_VERSIONS = ['32']
 CHROMOSOMES = list(range(1, 23)) + ['X', 'Y']
+INSTANCE_THRESHOLD = 10
+
+# TODO: The following are for debugging purposes only and should be removed eventually
+# ----------------------------------
+MAX_DOMAINS = 3
+# ----------------------------------
 
 wildcard_constraints:
     pfam_version="\d+"
 
+import pandas as pd
+import glob
+
+def domains_of_interest(pattern):
+    retval = []
+    for pfam_version in PFAM_VERSIONS:
+        domain_stats_df_file = f"{config['output_dir']}/pfam/{pfam_version}/domains_stats_df.csv"
+        df = pd.read_csv(domain_stats_df_file, sep='\t', index_col=0)
+        hmms = df[df.instances > INSTANCE_THRESHOLD].index.tolist()[:MAX_DOMAINS]
+        retval.extend([pattern.format(pfam_version=pfam_version, hmm=_hmm) for _hmm in hmms])
+    return retval
+
 rule all:
     input:
-        expand(f"{config['output_dir']}/csq_filtered/parsed_filtered_chrom{{chromosome}}.csv", chromosome=CHROMOSOMES),
-        expand(f"{config['output_dir']}/pfam/{{pfam_version}}/all_domains_genes_prot_seq.pik", pfam_version=PFAM_VERSIONS),
-        expand(f"{config['output_dir']}/pfam/{{pfam_version}}/domains_sequences_dict.pik", pfam_version=PFAM_VERSIONS),
+        [],
+        # f"{config['output_dir']}/jsd_scores"
+        # expand(f"{config['output_dir']}/csq_filtered/parsed_filtered_chrom{{chromosome}}.csv", chromosome=CHROMOSOMES)
+        # domains_of_interest(f"{config['output_dir']}/pfam/{{pfam_version}}/spd3/{{hmm}}")
+        domains_of_interest(f"{config['output_dir']}/pfam/{{pfam_version}}/hmm_states/{{hmm}}.1.pik")
 
-        expand(f"{config['output_dir']}/pfam/{{pfam_version}}/updated_domain_to_clan_dict.pik", pfam_version=PFAM_VERSIONS),      # domain -> clan mapping
-        expand(f"{config['output_dir']}/pfam/{{pfam_version}}/updated_clan_to_domains_dict.pik", pfam_version=PFAM_VERSIONS),     # clan -> domains mapping
-        expand(f"{config['output_dir']}/pfam/{{pfam_version}}/updated_domain_to_pfam_acc_dict.pik", pfam_version=PFAM_VERSIONS),  # domain -> pfam accession id mapping
-        expand(f"{config['output_dir']}/pfam/{{pfam_version}}/domain_to_clan_dict.pik", pfam_version=PFAM_VERSIONS),              # domain -> clan mapping, for human proteome
-        expand(f"{config['output_dir']}/pfam/{{pfam_version}}/clan_to_domains_dict.pik", pfam_version=PFAM_VERSIONS),             # clan -> domains mapping, for human proteome
-        expand(f"{config['output_dir']}/pfam/{{pfam_version}}/domain_to_pfam_acc_dict.pik", pfam_version=PFAM_VERSIONS)           # domain -> pfam accession id mapping, for human proteome
+        # domains_of_interest(f"{config['output_dir']}/pfam/{{pfam_version}}/pssms/{{hmm}}"),
+        # expand(f"{config['output_dir']}/pfam/{{pfam_version}}/indel/__{{chromosome}}", pfam_version=PFAM_VERSIONS, chromosome=CHROMOSOMES),
+        # expand(f"{config['output_dir']}/pfam/{{pfam_version}}/all_domains_genes_prot_seq.pik", pfam_version=PFAM_VERSIONS),
+        # expand(f"{config['output_dir']}/pfam/{{pfam_version}}/domains_sequences_dict.pik", pfam_version=PFAM_VERSIONS),
+
+        # expand(f"{config['output_dir']}/pfam/{{pfam_version}}/updated_domain_to_clan_dict.pik", pfam_version=PFAM_VERSIONS),      # domain -> clan mapping
+        # expand(f"{config['output_dir']}/pfam/{{pfam_version}}/updated_clan_to_domains_dict.pik", pfam_version=PFAM_VERSIONS),     # clan -> domains mapping
+        # expand(f"{config['output_dir']}/pfam/{{pfam_version}}/updated_domain_to_pfam_acc_dict.pik", pfam_version=PFAM_VERSIONS),  # domain -> pfam accession id mapping
+        # expand(f"{config['output_dir']}/pfam/{{pfam_version}}/domain_to_clan_dict.pik", pfam_version=PFAM_VERSIONS),              # domain -> clan mapping, for human proteome
+        # expand(f"{config['output_dir']}/pfam/{{pfam_version}}/clan_to_domains_dict.pik", pfam_version=PFAM_VERSIONS),             # clan -> domains mapping, for human proteome
+        # expand(f"{config['output_dir']}/pfam/{{pfam_version}}/domain_to_pfam_acc_dict.pik", pfam_version=PFAM_VERSIONS),          # domain -> pfam accession id mapping, for human proteome
 
 # -----------------------------------------------------------------------------
 # Parse human chromosome data and save useful information in a csv file,
@@ -170,3 +195,73 @@ rule domain_sequences:
     output:
         f"{config['output_dir']}/pfam/{{pfam_version}}/domains_sequences_dict.pik"
     script: "scripts/5.domain_stats/domains_sequences_todict.py"
+
+rule indels:
+    input:
+        f"{config['output_dir']}/pfam/{{pfam_version}}/domains_stats_df.csv",
+        f"{config['output_dir']}/csq_filtered/parsed_filtered_chrom{{chromosome}}.csv",
+        f"{config['output_dir']}/pfam/{{pfam_version}}/domains_canonic_prot",
+        f"{config['output_dir']}/pfam/{{pfam_version}}/hmms",
+        f"{config['output_dir']}/exons_index_length.pik"
+    output:
+        directory(f"{config['output_dir']}/pfam/{{pfam_version}}/indel/__{{chromosome}}")
+    script: "scripts/5.HMM_alter_align/chrom_gene_indels_edit.py"
+
+# -----------------------------------------------------------------------------
+# State dictionaries for each domain
+#
+# The following steps modify the dictionaries and save them in pretty much the
+# same format, but use the suffix .0/.1 etc to keep track of which steps
+# have been applied.
+# None of this awkwardness would be needed if we simply save csv files and
+# keep adding columns to it as we add more features
+# -----------------------------------------------------------------------------
+rule alteration_to_hmm_state:
+    input:
+        f"{config['output_dir']}/pfam/{{pfam_version}}/hmms/{{hmm}}.csv",
+        f"{config['output_dir']}/pfam/{{pfam_version}}/domains_canonic_prot",
+        f"{config['output_dir']}/pfam/{{pfam_version}}/indel",
+        f"{config['input_dir']}/hg19.2bit"
+    output:
+        f"{config['output_dir']}/pfam/{{pfam_version}}/hmm_states/{{hmm}}.0.pik"
+    script: "scripts/5.HMM_alter_align/alteration_to_hmm_state.py"
+
+# -----------------------------------------------------------------------------
+# When legacy=True; jsd folder download from gencomp1, use f"{config['input_dir']}/Homo_sapiens.GRCh37
+# When legacy=False; jsd folder generated by process_jsd_data, use f"{config['output_dir']}/jsd_scores"
+# as the jsd folder
+# -----------------------------------------------------------------------------
+rule add_jsd:
+    params:
+        legacy=True,
+        hmm="{hmm}"
+    input:
+        f"{config['output_dir']}/pfam/{{pfam_version}}/hmm_states",
+        f"{config['output_dir']}/pfam/{{pfam_version}}/domains_canonic_prot",
+        f"{config['input_dir']}/Homo_sapiens.GRCh37"
+    output:
+        f"{config['output_dir']}/pfam/{{pfam_version}}/hmm_states/{{hmm}}.1.pik"
+    script: "scripts/6.Ext_features/add_jsd.py"
+
+# -----------------------------------------------------------------------------
+rule blast:
+    params: hmm="{hmm}"
+    input: domain_sequences_dict=f"{config['output_dir']}/pfam/{{pfam_version}}/domains_sequences_dict.pik"
+    output: output_folder=directory(f"{config['output_dir']}/pfam/{{pfam_version}}/pssms/{{hmm}}")
+    script: "scripts/6.Ext_features/process_blast.py"
+
+rule spider2:
+    input:
+        pssm_folder=f"{config['output_dir']}/pfam/{{pfam_version}}/pssms/{{hmm}}"
+    output:
+        output_folder=directory(f"{config['output_dir']}/pfam/{{pfam_version}}/spd3/{{hmm}}")
+    script:
+        "scripts/6.Ext_features/process_spider2.py"
+
+rule process_jsd_data:
+    input:
+        f"{config['input_dir']}/100way-jsdconservation_domainweights-GRCh37.txt.gz"
+    output:
+        output_folder=directory(f"{config['output_dir']}/jsd_scores")
+    script:
+        "scripts/6.Ext_features/process_jsd_data.py"

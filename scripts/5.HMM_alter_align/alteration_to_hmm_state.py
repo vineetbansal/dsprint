@@ -1,59 +1,32 @@
 import pandas as pd
-import numpy as np
-import math
+import os.path
 from collections import defaultdict
-from os import environ
 import pickle
-import fileinput
-import sys
-import datetime
-from mapping_func import create_exon_pos_table, find_chrom_bps, protein_pos_to_hmm_state_and_aa
+
+from Bio.Seq import Seq
+from Bio.Alphabet import generic_dna
+
 from calc_exac_freq_func import create_alt_codon, exac_validation_checks, retrieve_codon_seq, codon_table
-from indels_func import is_indel, table_editing, indel_type
 from af_format_calc import format_af, calculate_af_adj
 
-DOMAIN_STATES_DF = "/media/vineetb/t5-vineetb/dsprint/out/pfam/32/domains_stats_df.csv"
-INSTANCE_THRESHOLD = 10
+from dsprint.core import CHROMOSOMES, get_chromosome_number, retrieve_exon_seq
+from dsprint.mapping_func import is_number, find_chrom_bps
 
-chromosome_names = [str(i) for i in range(1, 23)] + ['X', 'Y']
+try:
+    snakemake
+except NameError:
+    import sys
+    if len(sys.argv) != 6:
+        print('Usage: <script> <hmm_file> <canonic_prot_folder> <indels_folder> <hg19_file> <output_file>')
+        sys.exit(0)
 
-
-def stop_codon_notation(aa):
-    """Coverting the HMMER 'x' char to '*' for stop codon notation unifirmity"""
-    if aa == 'X':
-        return "*"
-    else:
-        return aa
-
-
-def validate_HMMER_hg19_codon(bp_ref, aa, chrom_pos_list, protein_pos, hmm_state):
-    """Validation: checking that the returned codon sequence from hg19 match the HMMER amino-acid"""
-
-    translated_aa = codon_table[bp_ref.upper()]
-    if aa == "X":
-        # If HMMER couldn't determine the aa, no validation check, just taking the translated aa from the ref seq.
-        return translated_aa
-
-    if translated_aa != aa:
-        print("chrom_pos_list = " + str(chrom_pos_list) + " protein_pos = " + str(protein_pos) + " hmm_state = " + str(
-            hmm_state))
-        print(" Error: hg19 codon sequence retrieved " + bp_ref.upper() + "=" + translated_aa + " doesn't match HMMER amino-acid " + aa)
-
-    # this would be saved into res_dict["ref_aa"]
-    return aa
+    HMM_FILE, CANONIC_PROT_FOLDER, INDELS_FOLDER, HG19_FILE, OUTPUT_FILE = sys.argv[1:]
+else:
+    HMM_FILE, CANONIC_PROT_FOLDER, INDELS_FOLDER, HG19_FILE = snakemake.input
+    OUTPUT_FILE = str(snakemake.output)
 
 
-def validate_exac_aa(exac_prot_data, exac_alt_aa, alt_aa, chrom_pos):
-    """Validation: checking if the calculated aa matches the ExAC aa"""
-    # For error logging
-    functionNameAsString = sys._getframe().f_code.co_name
-
-    if exac_prot_data and exac_alt_aa != alt_aa:
-        raise RuntimeError(chrom_pos + " Error: the ExAC alt aa " + exac_alt_aa + " doesn't match my alt aa calculation " + alt_aa)
-
-
-def change_ref_aa(res_dict, alterations_af_dict, alterations_af_adj_dict, aa, aa_sum, aa_adj_sum, bp_af_dict,
-                  bp_af_adj_dict):
+def change_ref_aa(res_dict, alterations_af_dict, alterations_af_adj_dict, aa, aa_sum, aa_adj_sum, bp_af_dict, bp_af_adj_dict):
     """Changing the ref aa and updating all relevant dictionaries"""
 
     # Adding the refrence allele to the alterations dicts
@@ -86,7 +59,7 @@ def change_ref_aa(res_dict, alterations_af_dict, alterations_af_adj_dict, aa, aa
     # Adding the ref bp to the bp dicts: calculating the af to add
     af_sum_snps_at_position_of_change = 0
     af_adj_sum_snps_at_position_of_change = 0
-    for bp in bp_af_dict.keys():
+    for bp in bp_af_dict:
         if bp[pos_of_change:pos_of_change + 1] != old_bp_ref[pos_of_change:pos_of_change + 1]:
             af_sum_snps_at_position_of_change += bp_af_dict[bp]
             af_adj_sum_snps_at_position_of_change += bp_af_adj_dict[bp]
@@ -122,26 +95,14 @@ def change_syn_ref_bp(new_bp_ref, old_bp_ref, res_dict, bp_af_dict, bp_af_adj_di
     del bp_af_dict[new_bp_ref]
 
 
-def get_chrom(chrom_raw_data):
-    pill_chrom = chrom_raw_data[chrom_raw_data.find(":") + 1:]
-    chrom = pill_chrom[:pill_chrom.find(":")]
-
-    return chrom
-
-
 # A function that return a dict with the MAF info for the protein position and corresponding chromosomal location
-def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom_raw_data, hmm_state):
-    # For error logging
-    functionNameAsString = sys._getframe().f_code.co_name
+def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom, is_complementary, seq):
 
-    # Initializing the results dictionary
     res_dict = {}
-    chrom = get_chrom(chrom_raw_data)
     res_dict["chrom"] = chrom
     res_dict["chrom_pos"] = chrom_pos_list
     res_dict["prot_pos"] = protein_pos
-    # res_dict["aa_ref"] = stop_codon_notation(aa)
-    res_dict["bp_ref"] = retrieve_codon_seq(chrom_pos_list, chrom_raw_data, chrom)
+    res_dict["bp_ref"] = seq
     # an counters lists
     an_dict = {k: [] for k in ["an", "an_adj", "an_afr", "an_amr", "an_eas", "an_fin", "an_nfe", "an_oth", "an_sas"]}
     res_dict.update(an_dict)
@@ -159,16 +120,19 @@ def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom_
     # Initializing more variables
     indels_cnt = 0
     errors_cnt = 0
-    inframe_ids = []
     alterations_af_dict = defaultdict(list)
     alterations_af_adj_dict = defaultdict(list)
     bp_af_dict = dict()
     bp_af_adj_dict = dict()
     bp_list = []  # Will not update when changing ref aa/bp, has to correspond to the population prob.
-    coverage_threshold = 20
 
-    # Validation: checking that the returned codon sequence from hg19 match the HMMER amino-acid
-    res_dict["aa_ref"] = validate_HMMER_hg19_codon(res_dict["bp_ref"], aa, chrom_pos_list, protein_pos, hmm_state)
+    aa_from_codon = str(Seq(res_dict["bp_ref"], generic_dna).translate())
+    if aa == 'X':  # If Hmmer couldn't determine the Amino Acid,
+        aa = aa_from_codon
+    else:
+        assert aa == aa_from_codon, "Amino Acid from Hmmer doesn't match that determined from codon sequence"
+
+    res_dict["aa_ref"] = aa
 
     # Going over all 3 codon positions
     for i in range(len(chrom_pos_list)):
@@ -176,9 +140,9 @@ def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom_
         alt_codon_pos = i
 
         # Retreiving relevant ExAC entry
-        chrom_alter_table = chrom_gene_table[chrom_gene_table["pos"] == chrom_pos]
+        chrom_alter_table = chrom_gene_table[chrom_gene_table['POS'] == chrom_pos]
 
-        if chrom_alter_table.shape[0] == 0:
+        if chrom_alter_table.empty:
             # No ExAC entry for this chromosome position - not adding alteration data
             continue
         else:
@@ -187,18 +151,18 @@ def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom_
                 chrom_alter = line
 
                 # Extracting ref and alt
-                exac_ref_bp = chrom_alter["ref"]
-                exac_alt_bp = chrom_alter["alt"]
+                exac_ref_bp = chrom_alter['REF']
+                exac_alt_bp = chrom_alter['ALT']
 
                 # Extracting coverage
-                res_dict["mean_coverage"].append(chrom_alter["coverage"])
+                res_dict["mean_coverage"].append(chrom_alter['COVERAGE'])
 
                 # Check if indel - skip
-                if (chrom_alter["comments"].find("ignore") >= 0):
+                if 'ignore' in chrom_alter['COMMENTS']:
                     indels_cnt += 1
                     continue
 
-                    # Perform validation checks (comparing ExAC and HMMER data)
+                # Perform validation checks (comparing ExAC and HMMER data)
                 exac_prot_data, exac_alt_aa, exac_alt_codon, errors = exac_validation_checks(chrom_alter, protein_pos,
                                                                                                aa, alt_codon_pos,
                                                                                                chrom_pos,
@@ -209,19 +173,18 @@ def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom_
                 # Extracting ExAC allele frequency data
                 af = chrom_alter["AF"]
                 an = int(chrom_alter["AN"])
-                an_adj = int(chrom_alter["AN_Adj"])
-                ac_adj = chrom_alter["AC_Adj"]
+                an_adj = int(chrom_alter["AN_ADJ"])
+                ac_adj = chrom_alter["AC_ADJ"]
 
                 # Calculating the alteration relevant data
-                alt_codon = create_alt_codon(exac_ref_bp, exac_alt_bp, res_dict["bp_ref"], alt_codon_pos,
-                                             chrom_raw_data)
+                alt_codon = create_alt_codon(exac_ref_bp, exac_alt_bp, res_dict["bp_ref"], alt_codon_pos, is_complementary)
                 if len(alt_codon) != 3:
                     continue
                 else:
                     alt_aa = codon_table[alt_codon.upper()]
 
-                # Validation: ExAC aa match the calculated alt
-                validate_exac_aa(exac_prot_data, exac_alt_aa, alt_aa, chrom_pos)
+                if exac_prot_data and exac_alt_aa != alt_aa:
+                    print(f"{chrom_pos} Error: the ExAC alt aa {exac_alt_aa} doesn't match my alt aa calculation {alt_aa}")
 
                 # Calculating the allele frequency adjusted
                 af_adj = calculate_af_adj(an_adj, ac_adj)
@@ -232,35 +195,35 @@ def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom_
                 bp_list.append(alt_codon)
 
                 res_dict["an"].append(an)
-                res_dict["an_adj"].append(chrom_alter["AN_Adj"])
-                res_dict["an_afr"].append(chrom_alter["AN_AFR"])
-                res_dict["an_amr"].append(chrom_alter["AN_AMR"])
-                res_dict["an_eas"].append(chrom_alter["AN_EAS"])
-                res_dict["an_fin"].append(chrom_alter["AN_FIN"])
-                res_dict["an_nfe"].append(chrom_alter["AN_NFE"])
-                res_dict["an_oth"].append(chrom_alter["AN_OTH"])
-                res_dict["an_sas"].append(chrom_alter["AN_SAS"])
+                res_dict["an_adj"].append(chrom_alter["AN_ADJ"])
+                # res_dict["an_afr"].append(chrom_alter["AN_AFR"])
+                # res_dict["an_amr"].append(chrom_alter["AN_AMR"])
+                # res_dict["an_eas"].append(chrom_alter["AN_EAS"])
+                # res_dict["an_fin"].append(chrom_alter["AN_FIN"])
+                # res_dict["an_nfe"].append(chrom_alter["AN_NFE"])
+                # res_dict["an_oth"].append(chrom_alter["AN_OTH"])
+                # res_dict["an_sas"].append(chrom_alter["AN_SAS"])
 
-                res_dict["ac_adj"].append(chrom_alter["AC_Adj"])
-                res_dict["ac_afr"].append(chrom_alter["AC_AFR"])
-                res_dict["ac_amr"].append(chrom_alter["AC_AMR"])
-                res_dict["ac_eas"].append(chrom_alter["AC_EAS"])
-                res_dict["ac_fin"].append(chrom_alter["AC_FIN"])
-                res_dict["ac_het"].append(chrom_alter["AC_Het"])
-                res_dict["ac_hom"].append(chrom_alter["AC_Hom"])
-                res_dict["ac_nfe"].append(chrom_alter["AC_NFE"])
-                res_dict["ac_oth"].append(chrom_alter["AC_OTH"])
-                res_dict["ac_sas"].append(chrom_alter["AC_SAS"])
+                res_dict["ac_adj"].append(chrom_alter["AC_ADJ"])
+                # res_dict["ac_afr"].append(chrom_alter["AC_AFR"])
+                # res_dict["ac_amr"].append(chrom_alter["AC_AMR"])
+                # res_dict["ac_eas"].append(chrom_alter["AC_EAS"])
+                # res_dict["ac_fin"].append(chrom_alter["AC_FIN"])
+                # res_dict["ac_het"].append(chrom_alter["AC_Het"])
+                # res_dict["ac_hom"].append(chrom_alter["AC_Hom"])
+                # res_dict["ac_nfe"].append(chrom_alter["AC_NFE"])
+                # res_dict["ac_oth"].append(chrom_alter["AC_OTH"])
+                # res_dict["ac_sas"].append(chrom_alter["AC_SAS"])
 
                 # Non-synonymous(!!!) - logging the alteration in the dictionary
-                if (alt_aa != res_dict["aa_ref"]):
+                if alt_aa != res_dict["aa_ref"]:
                     alterations_af_dict[alt_aa].append(format_af(float(af)))
                     alterations_af_adj_dict[alt_aa].append(format_af(af_adj))
 
                 # Saving the SIFT and PolyPhen scores (for both syn and nonsyn)
                 res_dict["SIFT"].append(chrom_alter["SIFT"])
-                res_dict["PolyPhen"].append(chrom_alter["PolyPhen"])
-                res_dict["clin_sig"].append(chrom_alter["clin_sig"])
+                # res_dict["PolyPhen"].append(chrom_alter["PolyPhen"])
+                # res_dict["clin_sig"].append(chrom_alter["clin_sig"])
 
                 # Saving SwissProt id and Ensembl prot id
                 res_dict["SwissProt"].append(chrom_alter["SWISSPROT"])
@@ -271,14 +234,13 @@ def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom_
     res_dict["af_adj"] = 0
 
     res_dict["aa_ref_orig"] = res_dict["aa_ref"]
-    for aa in alterations_af_dict.keys():
+    for aa in alterations_af_dict:
         aa_sum = sum(alterations_af_dict[aa])
         aa_adj_sum = sum(alterations_af_adj_dict[aa])
 
         # Checking if any alteration is above 0.5, and changing the ref accordingly
         if aa_sum > 0.5:
-
-            # Update all relevent information to switching a ref aa
+            # Update all relevant information to switching a ref aa
             change_ref_aa(res_dict, alterations_af_dict, alterations_af_adj_dict, aa, aa_sum, aa_adj_sum, bp_af_dict,
                           bp_af_adj_dict)
             break
@@ -290,9 +252,9 @@ def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom_
         res_dict["af"] = format_af(res_dict["af"])
         res_dict["af_adj"] = format_af(res_dict["af_adj"])
 
-    # Checking if any syn aleration bp is above 0.5 (nonsyn were already checked), and changing ref bp accordingly
-    for codon in bp_af_adj_dict.keys():
-        if (codon_table[codon] == res_dict["aa_ref"]) and (bp_af_adj_dict[codon] > 0.5):
+    # Checking if any syn alteration bp is above 0.5 (nonsyn were already checked), and changing ref bp accordingly
+    for codon in bp_af_adj_dict:
+        if codon_table[codon] == res_dict["aa_ref"] and bp_af_adj_dict[codon] > 0.5:
             new_bp_ref = codon
             old_bp_ref = res_dict["bp_ref"]
             change_syn_ref_bp(new_bp_ref, old_bp_ref, res_dict, bp_af_dict, bp_af_adj_dict)
@@ -305,104 +267,98 @@ def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom_
     return res_dict, indels_cnt, errors_cnt
 
 
-def get_genes_on_real_chromosomes(sorted_domain_data):
-    """
-    Get all the domains genes that are on real chromosomes (not patches)
-    """
-
-    genes_on_chroms = []
-    for index, line in sorted_domain_data.iterrows():
-        if line["chrom_num"] in chromosome_names:
-            genes_on_chroms.append(line["gene"])
-
-    unique_genes = pd.Series(genes_on_chroms).unique()
-    return unique_genes
-
-
 if __name__ == '__main__':
 
-    domain_stats_df = pd.read_csv(DOMAIN_STATES_DF, sep='\t', index_col=0)
-    filtered_domain_list = domain_stats_df[domain_stats_df.instances > INSTANCE_THRESHOLD].index.tolist()
+    domain_name = os.path.splitext(os.path.basename(HMM_FILE))[0]
 
-    for domain_name in filtered_domain_list:
-        chrom_gene_path = curr_dir[0] + "/domain_gene_exac/pfam-v" + pfam_version + "/" + domain_name + "/"
-        states_dict = defaultdict(list)
+    with open(os.path.join(CANONIC_PROT_FOLDER, f'{domain_name}_canonic_prot.pik'), 'rb') as f:
+        canonic_protein = pickle.load(f)
 
-        # A list to count indels per gene
-        domain_ens_genes_indels = []
+    domain_data = pd.read_csv(HMM_FILE, sep='\t', index_col=0, dtype={"chrom_num": str})
 
-        # A list to count validation errors per gene
-        domain_ens_genes_errors = []
+    chrom_gene_path = os.path.join(INDELS_FOLDER, domain_name)
+    states_dict = defaultdict(list)
 
-        # Getting a list of all the relevant ensembl gene ids for this domain
-        domain_ens_genes_all = get_genes_on_real_chromosomes(sorted_domain_data)
+    # For each ensembl gene in the domain data - finding all the ExAC alterations
+    ens_genes = domain_data[domain_data['chrom_num'].isin(CHROMOSOMES)].gene.unique().tolist()
+    n_ens_genes = len(ens_genes)
 
-        # For each ensembl gene in the domain data - finding all the ExAC alterations
-        for ens_gene in domain_ens_genes_all:
+    for i, ens_gene in enumerate(ens_genes):
 
-            # Getting gene-chrom (ExAC) data tables
-            chrom_gene_table = pd.read_csv(chrom_gene_path + ens_gene + "/chrom_gene_table.csv", sep='\t', index_col=0,
-                                           dtype={"AC": int, "AC_AFR": int, "AC_AMR": int, "AC_Adj": int, "AC_EAS": int,
-                                                  "AC_FIN": int, "AC_Het": int, "AC_Hom": int, "AC_NFE": int, "AC_OTH": int,
-                                                  "AC_SAS": int, "AF": float, "AN": int, "AN_AFR": int,
-                                                  "AN_AMR": int, "AN_Adj": int, "AN_EAS": int, "AN_FIN": int, "AN_NFE": int,
-                                                  "AN_OTH": int, "AN_SAS": int, "prot_pos": str})
-            chrom_gene_table.fillna('', inplace=True)
-            exon_table = pd.read_csv(chrom_gene_path + ens_gene + "/exon_table.csv", sep='\t', index_col=0)
+        # Getting gene-chrom (ExAC) data tables
+        chrom_gene_table = pd.read_csv(os.path.join(chrom_gene_path, ens_gene, f"chrom_gene_table.csv"), index_col=0,
+                                       dtype={"AC": int, "AC_AFR": int, "AC_AMR": int, "AC_ADJ": int, "AC_EAS": int,
+                                              "AC_FIN": int, "AC_Het": int, "AC_Hom": int, "AC_NFE": int, "AC_OTH": int,
+                                              "AC_SAS": int, "AF": float, "AN": int, "AN_AFR": int,
+                                              "AN_AMR": int, "AN_Adj": int, "AN_EAS": int, "AN_FIN": int, "AN_NFE": int,
+                                              "AN_OTH": int, "AN_SAS": int, "PROTEIN_POSITION": str})
+        chrom_gene_table.fillna('', inplace=True)
+        exon_table = pd.read_csv(os.path.join(chrom_gene_path, ens_gene, "exon_table.csv"), index_col=0)
 
-            # Filtering the domain data for this gene according to the canonical protein id
-            canonic_prot = canonic_protein[ens_gene]
-            canonic_prot_t = canonic_prot[:canonic_prot.find(".")]  # Trimming the ".#" at the end
-            domain_gene_table = sorted_domain_data[sorted_domain_data["prot"] == canonic_prot]
-            # Making sure that if two HMM-matches overlaps, the higher bit score will come first in the table
-            domain_gene_table = domain_gene_table.sort_values(by="BitScore", ascending=False)
-            domain_gene_name = domain_gene_table["hugoSymbol"].unique()[0]
-            if len(domain_gene_table["hugoSymbol"].unique()) > 1:
-                raise RuntimeError(" Error: " + ens_gene + ": more than one Hugo symbol")
+        # Filtering the domain data for this gene according to the canonical protein id
+        canonic_prot = canonic_protein[ens_gene]
+        canonic_prot_t = canonic_prot[:canonic_prot.find(".")]  # Trimming the ".#" at the end
+        domain_gene_table = domain_data[domain_data["prot"] == canonic_prot]
+        # Making sure that if two HMM-matches overlaps, the higher bit score will come first in the table
+        domain_gene_table = domain_gene_table.sort_values(by="BitScore", ascending=False)
+        domain_gene_name = domain_gene_table["hugoSymbol"].unique()[0]
+        if len(domain_gene_table["hugoSymbol"].unique()) > 1:
+            raise RuntimeError(" Error: " + ens_gene + ": more than one Hugo symbol")
 
-            # Extracting neccessary information from the gene-domain data
-            chrom_raw_data = domain_gene_table["chromosome"].unique()[0]  # there should be only one element here
-            if len(domain_gene_table["chromosome"].unique()) > 1:
-                raise RuntimeError(" Error: " + ens_gene + ": more than one chromosome raw data")
-            targetid = domain_gene_table["#TargetID"].unique()[0]
+        # Extracting neccessary information from the gene-domain data
+        chrom_raw_data = domain_gene_table["chromosome"].unique()[0]  # there should be only one element here
+        if len(domain_gene_table["chromosome"].unique()) > 1:
+            raise RuntimeError(" Error: " + ens_gene + ": more than one chromosome raw data")
+        targetid = domain_gene_table["#TargetID"].unique()[0]
 
-            # A counter for indels inside the gene
-            protein_indels_cnt = 0
-            # A counter for validation errors inside the gene
-            protein_errors_cnt = 0
+        n_indels = n_errors = 0
 
-            # Iterating over the amino-acids of the protein
-            prot_len = int(domain_gene_table["length"].unique()[0])
+        # Query HG19 and fill in a nucleobase sequence column in our exon_table dataframe
+        chromosome = get_chromosome_number(chrom_raw_data)
+        is_complementary = 'complement' in chrom_raw_data
 
-            for protein_pos in range(1, prot_len + 1):
+        exon_table['seq'] = retrieve_exon_seq(exon_table.start_pos, exon_table.end_pos, chromosome, HG19_FILE,
+                                              complement=is_complementary)
 
-                # Trying to match HMM-state, and retreive the aa from HMMER results
-                hmm_state, aa = protein_pos_to_hmm_state_and_aa(protein_pos,
-                                                                  domain_gene_table)  # TODO: what happens when two matches overlap? maybe sort to the best bit score?
+        # Iterating over the amino-acids of the protein
+        prot_len = int(domain_gene_table["length"].unique()[0])
+
+        for index, row in domain_gene_table.sort_values(by='TargetStart').iterrows():
+
+            target_start = row.TargetStart
+            target_end = row.TargetEnd
+            hmm_pos = (row["HMM_Pos"]).split(",")
+            target_seq = list(row["Target_Seq"])
+
+            if '-' in target_seq:
+                # Remove deletions from both lists
+                indices = [i for i, x in enumerate(target_seq) if x == "-"]
+                target_seq = [i for j, i in enumerate(target_seq) if j not in indices]
+                hmm_pos = [i for j, i in enumerate(hmm_pos) if j not in indices]
+
+            for protein_pos in range(target_start, target_end + 1):
+                index_inside_match = int(protein_pos - target_start)
+                hmm_state_text = hmm_pos[index_inside_match]
 
                 # If there's a match to HMM-state: find the corresponding codon bps chromosome positions
-                if hmm_state > 0:
-                    chrom_pos_list = find_chrom_bps(protein_pos, exon_table, chrom_raw_data)
+                if is_number(hmm_state_text):
+                    hmm_state = int(hmm_state_text)
+                    aa = (target_seq[index_inside_match]).upper()
+                    chrom_pos_list, seq = find_chrom_bps(protein_pos, exon_table, chrom_raw_data)
 
-                    # Analysis of the amino-acid MAF and realted data, returned in a dictionary
-                    (info_dict, indels_cnt, errors_cnt) = calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos,
-                                                                             aa, chrom_raw_data, hmm_state)
+                    # Analysis of the amino-acid MAF and related data, returned in a dictionary
+                    info_dict, indels_cnt, errors_cnt = calc_exac_maf_data(chrom_pos_list, chrom_gene_table,
+                                                                           protein_pos,
+                                                                           aa, chromosome, is_complementary, seq)
                     info_dict["ens_gene"] = ens_gene
                     info_dict["prot_len"] = prot_len
 
                     # Adding the dictionary to the HMM-state list
                     states_dict[hmm_state].append(info_dict)
+                    n_indels += indels_cnt
+                    n_errors += errors_cnt
 
-                    # Adding the indels to the global counter
-                    protein_indels_cnt += indels_cnt
+        print(f"Finished gene {i}/{n_ens_genes}. Indels={n_indels}, Errors={n_errors}")
 
-                    # Adding the errors to the global counter
-                    protein_errors_cnt += errors_cnt
-
-            domain_ens_genes_indels.append(protein_indels_cnt)
-            domain_ens_genes_errors.append(protein_errors_cnt)
-            print("Finished protein " + ens_gene)
-
-        with open(os.path.join(OUTPUT_FOLDER, domain_name + "_hmm_states_dict.pik"), 'wb') as handle:
-            pickle.dump(states_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
-        print("Finished domain " + domain_name)
+    with open(OUTPUT_FILE, 'wb') as f:
+        pickle.dump(states_dict, f, protocol=pickle.HIGHEST_PROTOCOL)

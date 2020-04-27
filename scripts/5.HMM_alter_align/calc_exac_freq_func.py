@@ -1,6 +1,10 @@
 import sys
-import os
-import subprocess
+
+from Bio.Seq import Seq
+from Bio.Alphabet import generic_dna
+
+from dsprint.core import retrieve_exon_seq
+
 
 # A dictionary that maps codons to amino acids
 codon_table = {
@@ -23,7 +27,7 @@ codon_table = {
 }
 
 
-def create_alt_codon(exac_ref_bp, curr_alt_bp, ref_codon, alt_codon_pos, chrom_raw_data):
+def create_alt_codon(exac_ref_bp, curr_alt_bp, ref_codon, alt_codon_pos, is_complementary=False):
     """
     A function that create the new codon for the alteration
     """
@@ -32,7 +36,7 @@ def create_alt_codon(exac_ref_bp, curr_alt_bp, ref_codon, alt_codon_pos, chrom_r
     functionNameAsString = sys._getframe().f_code.co_name
 
     # Complement strand - transversing the bp to base-complement
-    if (chrom_raw_data.find("complement") >= 0):
+    if is_complementary:
         new_bp = ""
         for c in curr_alt_bp:
             if (c.upper() == 'A'):
@@ -77,45 +81,23 @@ def create_alt_codon(exac_ref_bp, curr_alt_bp, ref_codon, alt_codon_pos, chrom_r
 
 # -------------------------------------------------------------------------------------------#
 
-def retrieve_codon_seq(chrom_pos_list, chrom_raw_data, chrom):
+def retrieve_codon_seq(chrom_pos_list, chrom, hg19_file, is_complementary=False):
     """
     Retrieve the codon base-pairs from the ref sequence
     """
-    chromsome_name = "chr" + chrom
-    chrom_pos_1st = chrom_pos_list[0]
-    chrom_pos_2nd = chrom_pos_list[1]
-    chrom_pos_3rd = chrom_pos_list[2]
+    assert(len(chrom_pos_list) == 3)
 
-    if (chrom_pos_1st < chrom_pos_3rd):
-        chrom_pos_list_adj = chrom_pos_list
+    # reduce individual calls to retrieve_exon_seq if possible, for speedup
+    is_contiguous = chrom_pos_list[0] == chrom_pos_list[1] - 1 == chrom_pos_list[2] - 2
+    if is_contiguous:
+        seq = retrieve_exon_seq(chrom_pos_list[0], chrom_pos_list[2], chrom, hg19_file)
     else:
-        chrom_pos_list_adj = reversed(chrom_pos_list)  # For reverse strand - order is reveresed
+        seq = ''.join([retrieve_exon_seq(pos, pos, chrom, hg19_file) for pos in chrom_pos_list])
 
-    seq = ""
-    for chrom_pos in chrom_pos_list:
-        seq_start = chrom_pos - 1
-        # query = !./twoBitToFa hg19.2bit stdout -seq=$chromsome_name -start=$seq_start -end=$chrom_po #Jupyter syntax
-        query = subprocess.check_output(
-            "../5.HMM_alter_align/twoBitToFa ../5.HMM_alter_align/hg19.2bit stdout -seq=%s -start=%s -end=%s" % (
-            chromsome_name, str(seq_start), str(chrom_pos)), shell=True)
-        query = ' '.join(query.split())  # remove whitespaces and newlines
-        seq = seq + query[-1]  # The last char is the result
-
-    # Complement strand - transversing the bp to base-complement
-    if (chrom_raw_data.find("complement") >= 0):
-        complement_seq = []
-        for c in seq:
-            if (c.upper() == 'A'):
-                complement_seq.append('T')
-            elif (c.upper() == 'T'):
-                complement_seq.append('A')
-            elif (c.upper() == 'G'):
-                complement_seq.append('C')
-            else:
-                complement_seq.append('G')
-        seq = complement_seq[0] + complement_seq[1] + complement_seq[2]
-
-    return seq.upper()
+    if is_complementary:
+        return str(Seq(seq, generic_dna).complement())
+    else:
+        return seq
 
 
 # -------------------------------------------------------------------------------------------#
@@ -123,27 +105,29 @@ def retrieve_codon_seq(chrom_pos_list, chrom_raw_data, chrom):
 def exac_validation_checks(chrom_alter, protein_pos, aa, alt_codon_pos, chrom_pos, bp_ref):
     """
     Validation checks on the data received from ExAC
+    :param chrom_alter:
+    :param protein_pos:
+    :param aa:
+    :param alt_codon_pos:
+    :param chrom_pos:
+    :param bp_ref:
+    :return:
     """
-
-    # For error logging
-    functionNameAsString = sys._getframe().f_code.co_name
-
     error_flag = False
 
     # Validation: the ExAC chromosome position is within a protein
     exac_prot_data = True
-    if (chrom_alter["prot_pos"] == ""):
-        print
-        functionNameAsString + " Error: ExAC chromosome position " + str(chrom_pos) + " doesn't correspond to a protein"
+    if chrom_alter["PROTEIN_POSITION"] == "":
+        print(" Error: ExAC chromosome position " + str(chrom_pos) + " doesn't correspond to a protein")
         # We assume it's an error in ExAC and logging alteration anyway.
         exac_prot_data = False
 
     else:
         # Validation: the ExAC protein position match the HMMER protein position
-        exac_prot_pos = chrom_alter["prot_pos"]
+        exac_prot_pos = chrom_alter["PROTEIN_POSITION"]
         # in case there's more than one position listed
-        if (exac_prot_pos.find("-") != -1):
-            # Trying to converty to int, but leaving as string if its a question mark
+        if exac_prot_pos.find("-") != -1:
+            # Trying to convert to int, but leaving as string if its a question mark
             try:
                 first_exac_prot_pos = int(exac_prot_pos[:exac_prot_pos.find("-")])
             except:
@@ -157,47 +141,31 @@ def exac_validation_checks(chrom_alter, protein_pos, aa, alt_codon_pos, chrom_po
             last_exac_prot_pos = first_exac_prot_pos
         # Checking of the protein position isn't within the range described by ExAC
         if not (first_exac_prot_pos <= protein_pos <= last_exac_prot_pos):
-            print
-            functionNameAsString + " " + str(chrom_pos) + " Error: ExAC protein position " + str(
-                first_exac_prot_pos) + " doesn't match HMMER protein position " + str(protein_pos)
+            print(str(chrom_pos) + " Error: ExAC protein position " + str(
+                first_exac_prot_pos) + " doesn't match HMMER protein position " + str(protein_pos))
             error_flag = True
 
         # Validation: the ExAC aa match the HMMER aa
-        exac_aa = chrom_alter["amino_acids"]
-        if (exac_aa.find("/") != -1):
+        exac_aa = chrom_alter["AMINO_ACIDS"]
+        if exac_aa.find("/") != -1:
             exac_ref_aa = exac_aa[:exac_aa.find("/")]
         else:
             exac_ref_aa = exac_aa
         exac_alt_aa = exac_aa[exac_aa.find("/") + 1:]
-        if (exac_ref_aa != aa):
-            if (exac_ref_aa == ""):
-                print
-                functionNameAsString + " " + str(chrom_pos) + " ExAC amino acid is blank"
+        if exac_ref_aa != aa:
+            if exac_ref_aa == "":
+                print(str(chrom_pos) + " ExAC amino acid is blank")
             else:
-                print
-                functionNameAsString + " " + str(
-                    chrom_pos) + " Error: ExAC amino acid identity " + exac_ref_aa + " doesn't match HMMER amino-acid " + aa
+                print(" Error: ExAC amino acid identity " + exac_ref_aa + " doesn't match HMMER amino-acid " + aa)
                 error_flag = True
 
         # Extracting aa codon data if exist
-        exac_codons = chrom_alter["codons"]
+        exac_codons = chrom_alter["CODONS"]
         exac_ref_codon = exac_codons[:exac_codons.find("/")]
         exac_alt_codon = exac_codons[exac_codons.find("/") + 1:]
         # Validation: the ExAC codon match the returned codon sequence from hg19, or at least one contain the other
         if ((exac_ref_codon.upper().find(bp_ref.upper()) == -1) and (
                 bp_ref.upper().find(exac_ref_codon.upper()) == -1)):
-            print
-            functionNameAsString + " " + str(
-                chrom_pos) + " Error: ExAC bp codon " + exac_ref_codon.upper() + " doesn't match hg19 codon sequence retrieved " + bp_ref.upper()
+            print(str(chrom_pos) + " Error: ExAC bp codon " + exac_ref_codon.upper() + " doesn't match hg19 codon sequence retrieved " + bp_ref.upper())
 
-        # Getting the changed position inside the ExAC codon - ignore for now
-        # exac_alt_codon_pos = 0
-        # for c in exac_ref_codon:
-        # if c.isupper():
-        # break
-        # exac_alt_codon_pos += 1
-        # Validation: the ExAC alt position match my alt codon position calculation
-        # if (exac_alt_codon_pos != alt_codon_pos):
-        # print functionNameAsString+" "+ str(chrom_pos)+" Error: the ExAC alt position in codon "+str(exac_alt_codon_pos)+" doesn't match my codon position calculation "+str(alt_codon_pos)
-
-        return (exac_prot_data, exac_alt_aa, exac_alt_codon, error_flag)
+        return exac_prot_data, exac_alt_aa, exac_alt_codon, error_flag

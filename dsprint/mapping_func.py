@@ -66,26 +66,17 @@ def create_exon_pos_table(chrom_raw, targetid, frameshift_file):
             continue
 
         # Adding the real exons to exons_pos list
-        exon_pos.append(ex.split(".."))
+        exon_pos.append([int(p) for p in ex.split("..")])
 
     # Creating a table for the start and end of exons
-    exon_df = pd.DataFrame(exon_pos)
-    exon_df.columns = ["start_pos", "end_pos"]
+    exon_df = pd.DataFrame(exon_pos, columns=('start_pos', 'end_pos'))
 
     # Correct frameshift if frameshift exist
     if frameshift_flag:
         correct_exons_frameshift(exon_df, targetid, frameshift_file)
 
-    exon_len = []
-    for index, exon in exon_df.iterrows():
-        exon_len.append(int(exon[1]) - int(exon[0]) + 1)
-    exon_df["length"] = exon_len
-    first_bp_count = 1
-    first_bp_list = []
-    for index, exon in exon_df.iterrows():
-        first_bp_list.append(first_bp_count)
-        first_bp_count += int(exon[2])
-    exon_df["first_bp_count"] = first_bp_list
+    exon_df['length'] = exon_df['end_pos'] - exon_df['start_pos'] + 1
+    exon_df['first_bp_count'] = exon_df.length.cumsum() - exon_df.length + 1
     return exon_df
 
 
@@ -104,7 +95,7 @@ def find_protein_pos(chrom_pos, exon_df, chrom_raw):
         first_bp_count = int(exon[3])
 
         # If the chrom position is inside this exon
-        if chrom_pos >= start_pos and chrom_pos <= end_pos:
+        if start_pos <= chrom_pos <= end_pos:
 
             # Calculate position for reverse complement strand:
             # the protein is translated from the end position towards the start position of the exon
@@ -126,13 +117,13 @@ def find_protein_pos(chrom_pos, exon_df, chrom_raw):
     return -1
 
 
-# -------------------------------------------------------------------------------------------#
-
 def find_chrom_bps(protein_pos, exon_table, chrom_raw_data):
     """
-    A function that get protein position and data-frame of exons,
-    and return the chromosome positions of the corresponding codon.
+    A function that gets protein position and data-frame of exons,
+    and returns the chromosome positions of the corresponding codon, as well as the nucleobases
+    at those positions
     """
+    seq = ''
 
     # calculate the mRNA transcript index of this protein position (the 1st bp in the triplet)
     transcript_pos = (protein_pos * 3) - 2
@@ -144,7 +135,7 @@ def find_chrom_bps(protein_pos, exon_table, chrom_raw_data):
         last_bp_count = first_bp_count + exon_length - 1
 
         # Checking if the transcript position is within this exon
-        if first_bp_count <= transcript_pos and transcript_pos <= last_bp_count:
+        if first_bp_count <= transcript_pos <= last_bp_count:
 
             start_pos = int(exon["start_pos"])
             end_pos = int(exon["end_pos"])
@@ -155,6 +146,7 @@ def find_chrom_bps(protein_pos, exon_table, chrom_raw_data):
             # the protein is translated from the end position towards the start position of the exon
             if chrom_raw_data.find("complement") >= 0:
                 chrom_pos_1st = end_pos - len_from_exon_start
+                seq += exon.seq[chrom_pos_1st - start_pos]
 
                 chrom_pos_2nd = chrom_pos_1st - 1
                 # If the exons end here: move to the next exon
@@ -162,36 +154,44 @@ def find_chrom_bps(protein_pos, exon_table, chrom_raw_data):
                     index += 1
                     chrom_pos_2nd = int(exon_table["end_pos"][index])
                     start_pos = int(exon_table["start_pos"][index])
-                    end_pos = int(exon_table["end_pos"][index])
+
+                seq += exon_table["seq"][index][chrom_pos_2nd - start_pos]
 
                 # If the exons ends here: move to the next exon
                 chrom_pos_3rd = chrom_pos_2nd - 1
                 if chrom_pos_3rd < start_pos:
                     index += 1
                     chrom_pos_3rd = int(exon_table["end_pos"][index])
+                    start_pos = int(exon_table["start_pos"][index])
+
+                seq += exon_table["seq"][index][chrom_pos_3rd - start_pos]
 
             # Calculate position for forward strand
             else:
                 chrom_pos_1st = start_pos + len_from_exon_start
+                seq += exon.seq[chrom_pos_1st - start_pos]
 
                 chrom_pos_2nd = chrom_pos_1st + 1
                 # If the exons end here: move to the next exon
                 if chrom_pos_2nd > end_pos:
                     index += 1
-                    chrom_pos_2nd = int(exon_table["start_pos"][index])
                     start_pos = int(exon_table["start_pos"][index])
                     end_pos = int(exon_table["end_pos"][index])
+                    chrom_pos_2nd = start_pos
+
+                seq += exon_table["seq"][index][chrom_pos_2nd - start_pos]
 
                 # If the exons end here: move to the next exon
                 chrom_pos_3rd = chrom_pos_2nd + 1
                 if chrom_pos_3rd > end_pos:
                     index += 1
-                    chrom_pos_3rd = int(exon_table["start_pos"][index])
+                    start_pos = int(exon_table["start_pos"][index])
+                    chrom_pos_3rd = start_pos
 
-            return chrom_pos_1st, chrom_pos_2nd, chrom_pos_3rd
+                seq += exon_table["seq"][index][chrom_pos_3rd - start_pos]
 
+            return (chrom_pos_1st, chrom_pos_2nd, chrom_pos_3rd), seq
 
-# -------------------------------------------------------------------------------------------#
 
 def is_number(s):
     """
@@ -202,46 +202,3 @@ def is_number(s):
         return True
     except ValueError:
         return False
-
-
-def protein_pos_to_hmm_state_and_aa(protein_pos, domain_gene_table):
-    """
-    A function that return the hmm state of that protein position, and the amino acid.
-    return -1 for positions outside of domains regions, -2 for matching insertion
-    #TODO: do we need also transcript id? do we want to consider more than 1 transcript per gene?
-    """
-    for index, row in domain_gene_table.iterrows():
-        target_start = row["TargetStart"]
-        target_end = row["TargetEnd"]
-        aa = "-"
-
-        # Check if the position is inside this domain instance of the gene
-        if protein_pos >= target_start and protein_pos <= target_end:
-
-            hmm_pos = (row["HMM_Pos"]).split(",")
-            target_seq = list(row["Target_Seq"])
-            index_inside_match = int(protein_pos - target_start)
-
-            # Get deletions indices
-            indices = [i for i, x in enumerate(target_seq) if x == "-"]
-
-            # Remove deletions from both lists
-            target_seq_no_del = [i for j, i in enumerate(target_seq) if j not in indices]
-            hmm_pos_no_del = [i for j, i in enumerate(hmm_pos) if j not in indices]
-
-            # Get the aa
-            aa = (target_seq_no_del[index_inside_match]).upper()
-
-            # Find the HMM match state
-            hmm_state_text = hmm_pos_no_del[index_inside_match]
-            if (is_number(hmm_state_text) == True):
-                hmm_state = int(hmm_state_text)
-            else:
-                # the position match insertion
-                hmm_state = -2
-
-            # Returning hmm_state and aa for match inside a domain's regions
-            return (hmm_state, aa)
-
-    # The protein position isn't in any domain region
-    return -1, '-'

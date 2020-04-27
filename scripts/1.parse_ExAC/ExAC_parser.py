@@ -39,7 +39,7 @@ except NameError:
 else:
     INPUT_FILE = snakemake.input[0]
     OUTPUT_FILES = snakemake.output
-    CHROMOSOMES = [os.path.splitext(os.path.basename(o)[len('parsed_chrom')])[0] for o in OUTPUT_FILES]
+    CHROMOSOMES = [os.path.splitext(os.path.basename(o)[len('parsed_chrom'):])[0] for o in OUTPUT_FILES]
 
 
 def update_main_fields(line_parts, d):

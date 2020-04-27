@@ -1,6 +1,9 @@
 biomart
+bx-python
+intervaltree
 jinja2
 networkx
 pandas
 pygments
+scipy
 snakemake

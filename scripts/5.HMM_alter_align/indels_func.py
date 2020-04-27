@@ -25,7 +25,7 @@ def is_indel(ref, alt, chrom_alter):
         if ((indel_len % 3) > 0):
 
             # Validation: ExAC identify this as a frameshift too
-            conseq = chrom_alter["conseq"]
+            conseq = chrom_alter['CONSEQUENCE']
             # if ("frameshift" not in conseq):
             #   print functionNameAsString+" Error: ExAC doesn't recognize a frameshift indel - "+str(chrom_alter["pos"])
 
@@ -61,86 +61,83 @@ def table_editing(chrom_gene_table):
     comments_col = []
 
     for index, line in chrom_gene_table.iterrows():
-        ref = line["ref"]
-        alt = line["alt"]
-        pos = line["pos"]
-        feature = line["feature"]
-        conseq = line["conseq"]
-        prot_pos = line["prot_pos"]
-        strand = line["strand"]
+        ref = line["REF"]
+        alt = line["ALT"]
+        pos = line["POS"]
+        strand = line["STRAND"]
 
         # Handling deletion
-        if (len(ref) > len(alt)):
+        if len(ref) > len(alt):
             d_cnt += 1
             comments_col.append("ignore for this position: d-" + str(d_cnt))
             # Adding to indels table only the inframe ones
-            if (is_indel(ref, alt, line) == indel_type.IN_FRAME_INDEL):
+            if is_indel(ref, alt, line) == indel_type.IN_FRAME_INDEL:
                 init_pos = pos + len(alt)
                 deletion_len = len(ref) - len(alt)
                 for j in range(deletion_len):
                     new_line = line.copy(deep=True)
-                    new_line["pos"] = init_pos + j
-                    new_line["ref"] = ref[j + 1]
-                    new_line["alt"] = "-"
-                    new_line["comments"] = "d-" + str(d_cnt)
+                    new_line["POS"] = init_pos + j
+                    new_line["REF"] = ref[j + 1]
+                    new_line["ALT"] = "-"
+                    new_line["COMMENTS"] = "d-" + str(d_cnt)
                     indels_table.loc[indels_table_i] = new_line
                     indels_table_i += 1
 
         # Handling insertion
-        elif (len(alt) > len(ref)):
+        elif len(alt) > len(ref):
             i_cnt += 1
             comments_col.append("ignore for this position: i-" + str(i_cnt))
 
             # Adding to indels table only the inframe ones
-            if (is_indel(ref, alt, line) == indel_type.IN_FRAME_INDEL):
+            if is_indel(ref, alt, line) == indel_type.IN_FRAME_INDEL:
                 init_pos = pos + len(ref)
                 # insertion_len = len(alt) - len(ref)
                 new_line = line.copy(deep=True)
-                if (strand == 1):
-                    new_line["pos"] = init_pos
+                if strand == 1:
+                    new_line["POS"] = init_pos
                 else:
-                    new_line["pos"] = init_pos - 1
-                new_line["ref"] = "-"
-                new_line["alt"] = alt[len(ref):]
-                new_line["comments"] = "i-" + str(i_cnt)
+                    new_line["POS"] = init_pos - 1
+                new_line["REF"] = "-"
+                new_line["ALT"] = alt[len(ref):]
+                new_line["COMMENTS"] = "i-" + str(i_cnt)
                 indels_table.loc[indels_table_i] = new_line
                 indels_table_i += 1
 
-        # Handling mismtach written with redundant bps
-        elif (len(ref) > 1):
+        # Handling mismatch written with redundant bps
+        elif len(ref) > 1:
             diff_idx = diff(ref, alt)
             # A case when only the first bp is the alteration
-            if (diff_idx == [0]):
+            if diff_idx == [0]:
                 # Fix ref and alt fields
-                chrom_gene_table.set_value(index, "ref", ref[0])
-                chrom_gene_table.set_value(index, "alt", alt[0])
+                chrom_gene_table.set_value(index, "REF", ref[0])
+                chrom_gene_table.set_value(index, "ALT", alt[0])
 
-                strand = line["strand"]
+                strand = line["STRAND"]
 
                 # Fix amino_acids field
-                aa = line["amino_acids"]
+                aa = line["AMINO_ACIDS"]
                 # If aa field is not empty
-                if (aa != ""):
-                    if (strand == 1):
-                        if (aa.find("/") != -1):
+                if aa != "":
+                    if strand == 1:
+                        if aa.find("/") != -1:
                             new_aa = aa[0] + aa[aa.find("/"):aa.find("/") + 2]
                         else:
                             new_aa = aa[0]
                     else:
-                        if (aa.find("/") != -1):
+                        if aa.find("/") != -1:
                             new_aa = aa[aa.find("/") - 1:aa.find("/") + 1] + aa[-1]
                         else:
                             new_aa = aa[-1]
-                    chrom_gene_table.set_value(index, "amino_acids", new_aa)
+                    chrom_gene_table.set_value(index, "AMINO_ACIDS", new_aa)
 
                 # Fix prot_pos field
-                prot_pos = line["prot_pos"]
-                if (prot_pos != ""):
-                    if (prot_pos.find("-") != -1):
-                        if (strand == 1):
-                            chrom_gene_table.set_value(index, "prot_pos", prot_pos[:prot_pos.find("-")])
+                prot_pos = line["PROTEIN_POSITION"]
+                if prot_pos != "":
+                    if prot_pos.find("-") != -1:
+                        if strand == 1:
+                            chrom_gene_table.set_value(index, "PROTEIN_POSITION", prot_pos[:prot_pos.find("-")])
                         else:
-                            chrom_gene_table.set_value(index, "prot_pos", prot_pos[prot_pos.find("-") + 1:])
+                            chrom_gene_table.set_value(index, "PROTEIN_POSITION", prot_pos[prot_pos.find("-") + 1:])
 
                 comments_col.append("removed redundant bps")
             else:
@@ -150,7 +147,7 @@ def table_editing(chrom_gene_table):
         else:
             comments_col.append("")
 
-    chrom_gene_table["comments"] = comments_col
+    chrom_gene_table["COMMENTS"] = comments_col
     # print "Number of insertions = "+str(i_cnt)
     # print "number of deletion = "+str(d_cnt)
 

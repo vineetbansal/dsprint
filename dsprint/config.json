@@ -14,5 +14,10 @@
     "output_suffix": ".csv"
   },
 
+  "blast": {
+    "path": "/media/vineetb/t5-vineetb/dsprint/tools/ncbi-blast-2.10.0+/bin",
+    "db": "/media/vineetb/t5-vineetb/dsprint/in/swissprot/swissprot"
+  },
+
   "scratch": "/media/vineetb/t5-vineetb/dsprint/scratch"
 }

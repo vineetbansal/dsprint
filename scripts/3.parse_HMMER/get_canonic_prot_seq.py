@@ -3,31 +3,12 @@ import os.path
 from collections import defaultdict
 import pickle
 import glob
-import subprocess
 
 from Bio.Seq import Seq
 from Bio.Alphabet import generic_dna
 
+from dsprint.core import retrieve_exon_seq
 from dsprint.mapping_func import create_exon_pos_table
-
-
-def retrieve_exon_seq(exon_start, exon_end, chrom, hg19_file, reverse_complement=False):
-    # index conversion for twoBitToFa
-    # start, 1-indexed inclusive -> 0-indexed inclusive, subtract 1
-    # end, 1-indexed inclusive -> 0-indexed exclusive, unchanged
-    exon_start = int(exon_start) - 1
-
-    seq = subprocess.check_output(
-        f'twoBitToFa {hg19_file} stdout -seq=chr{chrom} -start={exon_start} -end={exon_end}',
-        shell=True
-    )
-    # Remove 1st line, whitespaces and newlines
-    seq = ''.join(seq.decode('ascii').split()[1:]).upper()
-
-    if reverse_complement:
-        return str(Seq(seq, generic_dna).reverse_complement())
-    else:
-        return seq
 
 
 try:

@@ -21,6 +21,7 @@ CHROMOSOME = os.path.splitext(os.path.basename(INPUT_FILE)[len('parsed_chrom'):]
 if __name__ == '__main__':
 
     coverage_df = pd.read_csv(os.path.join(COVERAGE_FOLDER, f'Panel.chr{CHROMOSOME}.coverage.txt.gz'), compression='gzip', sep='\t')
+    coverage_df = coverage_df.astype({'#chrom': str})
     coverage_df = coverage_df[coverage_df['#chrom'] == CHROMOSOME]
     coverage_series = coverage_df.set_index('pos')['mean']
 
