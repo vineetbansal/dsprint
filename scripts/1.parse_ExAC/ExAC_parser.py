@@ -4,7 +4,7 @@ import gzip
 import pandas as pd
 from collections import defaultdict
 
-import dsprint
+from dsprint.core import POPULATIONS_ACS, POPULATIONS_ANS
 
 
 # Positions in the VCF record - these are fixed as per .vcf format and can/should be hardcoded
@@ -30,16 +30,17 @@ try:
     snakemake
 except NameError:
     import sys
-    if len(sys.argv) != 4:
-        print('Usage: <script> <input_file> <chromosome_number> <output_file>')
+    if len(sys.argv) != 3:
+        print('Usage: <script> <input_file> <output_file>')
         sys.exit(0)
 
-    INPUT_FILE, CHROMOSOMES, OUTPUT_FILES = sys.argv[1:]
-    CHROMOSOMES, OUTPUT_FILES = [CHROMOSOMES], [OUTPUT_FILES]
+    INPUT_FILE, OUTPUT_FILES = sys.argv[1:]
+    OUTPUT_FILES = [OUTPUT_FILES]
 else:
     INPUT_FILE = snakemake.input[0]
     OUTPUT_FILES = snakemake.output
-    CHROMOSOMES = [os.path.splitext(os.path.basename(o)[len('parsed_chrom'):])[0] for o in OUTPUT_FILES]
+
+CHROMOSOMES = [os.path.splitext(os.path.basename(o)[len('parsed_chrom'):])[0] for o in OUTPUT_FILES]
 
 
 def update_main_fields(line_parts, d):
@@ -49,46 +50,64 @@ def update_main_fields(line_parts, d):
 
     info = line_parts[INFO]
 
-    # AC = allele count in genotypes, for each ALT allele, in the same order as listed
-    AC_beg = info.find('AC=')
-    AC_end = info.find(';', AC_beg)
-    AC_list = (info[AC_beg + 3:AC_end]).split(',')
+    # AC = Allele Count
+    AC_beg = info.find("AC=")
+    AC_end = info.find(";", AC_beg)
+    AC_list = (info[AC_beg + 3:AC_end]).split(",")
 
     # AC_adjusted = Adjusted Allele Count
-    AC_adj_beg = info.find('AC_Adj=')
-    AC_adj_end = info.find(';', AC_adj_beg)
-    AC_adj_list = (info[AC_adj_beg + 7:AC_adj_end]).split(',')
+    AC_adj_beg = info.find("AC_Adj=")
+    AC_adj_end = info.find(";", AC_adj_beg)
+    AC_adj_list = (info[AC_adj_beg + 7:AC_adj_end]).split(",")
 
-    # AF = allele frequency for each ALT allele in the same order as listed (use this when estimated from primary data,
-    # not called genotypes)
-    AF_beg = info.find('AF=')
-    AF_end = info.find(';', AF_beg)
-    AF_list = (info[AF_beg + 3:AF_end]).split(',')
+    # Allele Count by population
+    ac_populations = {}
+    for ac_x in POPULATIONS_ACS:
+        _begin = info.find(f'{ac_x}=') + len(ac_x) + 1
+        _end = info.find(";", _begin)
+        ac_populations[ac_x] = info[_begin:_end].split(',')
 
-    # AN = total number of alleles in called genotypes
-    AN_beg = info.find('AN=')
-    AN_end = info.find(';', AN_beg)
-    d['AN'].append(info[AN_beg + 3:AN_end])
+    # AF = Allele Frequency
+    AF_beg = info.find("AF=")
+    AF_end = info.find(";", AF_beg)
+    AF_list = (info[AF_beg + 3:AF_end]).split(",")
+
+    # AN = Allele Number
+    AN_beg = info.find("AN=")
+    AN_end = info.find(";", AN_beg)
+    d["AN"].append(info[AN_beg + 3:AN_end])
 
     # AN_adj = Adjusted Allele Number
-    AN_adj_beg = info.find('AN_Adj=')
-    AN_adj_end = info.find(';', AN_adj_beg)
-    d['AN_ADJ'].append(info[AN_adj_beg + 7:AN_adj_end])
+    AN_adj_beg = info.find("AN_Adj=")
+    AN_adj_end = info.find(";", AN_adj_beg)
+    d["AN_ADJ"].append(info[AN_adj_beg + 7:AN_adj_end])
 
-    # DP = combined depth across samples, e.g. DP=154
-    DP_beg = info.find('DP=')
-    DP_end = info.find(';', DP_beg)
-    d['DP'].append(info[DP_beg + 3:DP_end])
+    # Allele Number by population
+    for an_x in POPULATIONS_ANS:
+        _begin = info.find(f'{an_x}=') + len(an_x) + 1
+        _end = info.find(";", _begin)
+        d[an_x].append(info[_begin:_end])
 
-    return AC_list, AC_adj_list, AF_list
+    # DP = "Approximate read depth
+    DP_beg = info.find("DP=")
+    DP_end = info.find(";", DP_beg)
+    d["DP"].append(info[DP_beg + 3:DP_end])
+
+    return AC_list, AC_adj_list, AF_list, ac_populations
 
 
 def fill_empty_fields(line_parts, alt_list, d):
+
     for i in range(len(alt_list)):
-        AC_list, AC_adj_list, AF_list = update_main_fields(line_parts, d)
-        d['AC'].append(AC_list[i])
-        d['AC_ADJ'].append(AC_adj_list[i])
-        d['AF'].append(AF_list[i])
+        AC_list, AC_adj_list, AF_list, ac_populations = update_main_fields(line_parts, d)
+
+        # Update the main fields
+        d["AC"].append(AC_list[i])
+        d["AC_ADJ"].append(AC_adj_list[i])
+        d["AF"].append(AF_list[i])
+        for k, v in ac_populations.items():
+            d[k].append(v[i])
+
         d['ALT'].append(alt_list[i])
 
         for k in CSQs:
@@ -162,7 +181,7 @@ if __name__ == '__main__':
                     for CSQ in CSQ_features:
                         CSQ_PARTS = CSQ.split('|')
                         # Update the main fields for each CSQ feature (so each CSQ will appear in a different line)
-                        AC_list, AC_adj_list, AF_list = update_main_fields(line_parts, d)
+                        AC_list, AC_adj_list, AF_list, ac_populations = update_main_fields(line_parts, d)
 
                         # Allele_num for deciding which alt, AC and AF to add - 1-indexed in .vcf file
                         allele_num = int(CSQ_PARTS[CSQ_I['ALLELE_NUM']]) - 1
@@ -172,6 +191,9 @@ if __name__ == '__main__':
                         d['AC'].append(AC_list[allele_num])
                         d['AC_ADJ'].append(AC_adj_list[allele_num])
                         d['AF'].append(AF_list[allele_num])
+
+                        for k, v in ac_populations.items():
+                            d[k].append(v[allele_num])
 
                         for k in CSQs:
                             d[k].append(CSQ_PARTS[CSQ_I[k]])

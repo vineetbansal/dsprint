@@ -109,8 +109,8 @@ def table_editing(chrom_gene_table):
             # A case when only the first bp is the alteration
             if diff_idx == [0]:
                 # Fix ref and alt fields
-                chrom_gene_table.set_value(index, "REF", ref[0])
-                chrom_gene_table.set_value(index, "ALT", alt[0])
+                chrom_gene_table.at[index, "REF"] = ref[0]
+                chrom_gene_table.at[index, "ALT"] = alt[0]
 
                 strand = line["STRAND"]
 
@@ -128,16 +128,16 @@ def table_editing(chrom_gene_table):
                             new_aa = aa[aa.find("/") - 1:aa.find("/") + 1] + aa[-1]
                         else:
                             new_aa = aa[-1]
-                    chrom_gene_table.set_value(index, "AMINO_ACIDS", new_aa)
+                    chrom_gene_table.at[index, "AMINO_ACIDS"] = new_aa
 
                 # Fix prot_pos field
                 prot_pos = line["PROTEIN_POSITION"]
                 if prot_pos != "":
                     if prot_pos.find("-") != -1:
                         if strand == 1:
-                            chrom_gene_table.set_value(index, "PROTEIN_POSITION", prot_pos[:prot_pos.find("-")])
+                            chrom_gene_table.at[index, "PROTEIN_POSITION"] = prot_pos[:prot_pos.find("-")]
                         else:
-                            chrom_gene_table.set_value(index, "PROTEIN_POSITION", prot_pos[prot_pos.find("-") + 1:])
+                            chrom_gene_table.at[index, "PROTEIN_POSITION"] = prot_pos[prot_pos.find("-") + 1:]
 
                 comments_col.append("removed redundant bps")
             else:

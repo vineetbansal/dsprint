@@ -10,6 +10,10 @@ CHROMOSOMES = [str(i) for i in range(1, 23)] + ['X', 'Y']
 INSTANCE_THRESHOLD = 10
 COVERAGE_THRESHOLD = 20  # Used for filtering of results in 1.parse_ExAC
 
+POPULATIONS = ['AFR', 'AMR', 'EAS', 'FIN', 'NFE', 'OTH', 'SAS']
+POPULATIONS_ANS = [f'AN_{x}' for x in POPULATIONS]
+POPULATIONS_ACS = [f'AC_{x}' for x in POPULATIONS]
+
 
 def get_chromosome_number(chromosome_str):
     """

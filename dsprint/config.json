@@ -16,7 +16,14 @@
 
   "blast": {
     "path": "/media/vineetb/t5-vineetb/dsprint/tools/ncbi-blast-2.10.0+/bin",
-    "db": "/media/vineetb/t5-vineetb/dsprint/in/swissprot/swissprot"
+    "dbs": {
+      "nr": "/media/vineetb/t5-vineetb/dsprint/in/nr/nr",
+      "swissprot": "/media/vineetb/t5-vineetb/dsprint/in/swissprot/swissprot"
+    },
+    "default_db": "swissprot",
+    "num_iterations": 3,
+    "num_threads": 8,
+    "remote": false
   },
 
   "scratch": "/media/vineetb/t5-vineetb/dsprint/scratch"

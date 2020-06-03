@@ -18,11 +18,8 @@ else:
     OUTPUT_FOLDER = snakemake.output.output_folder
 
 if __name__ == '__main__':
-    print('PSSM_FOLDER='+str(PSSM_FOLDER))
-    print('OUTPUT_FOLDER='+str(OUTPUT_FOLDER))
 
-    if not os.path.exists(OUTPUT_FOLDER):
-        os.makedirs(OUTPUT_FOLDER)
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
     nndir = os.path.join(os.path.dirname(pred_pssm.__file__), '..', 'dat/')
     dict1_nn = pred_pssm.load_NN(nndir + 'pp1.npz')

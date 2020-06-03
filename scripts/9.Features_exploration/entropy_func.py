@@ -26,7 +26,7 @@ def JSdiv(po, qo, wt=0.5):
     q = [float(i) for i in qo]
 
     # Take weighted average of KL divergence
-    av = [wt * p[x] + (1 - wt) * q[x] for x in xrange(len(p))]
+    av = [wt * p[x] + (1 - wt) * q[x] for x in range(len(p))]
     return wt * KLdiv(p, av) + (1 - wt) * KLdiv(q, av)
 
 
@@ -74,24 +74,23 @@ def JSD_hist(aa_hist, background=JSD_background.BLOSUM62):
     Compute the Jensen-Shannon divergence of the aa frequencies, with background frequency.
     """
 
-    if (background == JSD_background.BLOSUM62):
+    if background == JSD_background.BLOSUM62:
         # Background frequencies of amino acids (BLOSUM62 matrix stationary distributions):
         q = [0.074, 0.052, 0.045, 0.054, 0.025, 0.034, 0.054, 0.074, 0.026, 0.068,
              0.099, 0.058, 0.025, 0.047, 0.039, 0.057, 0.051, 0.013, 0.032, 0.073, 0]
 
-    elif (background == JSD_background.UNIPROT):
+    elif background == JSD_background.UNIPROT:
         # Background frequencies of Uniprot (as of 25-Oct-2017): https://www.ebi.ac.uk/uniprot/TrEMBLstats
         q = [0.0903, 0.0122, 0.0544, 0.0616, 0.0393, 0.0723, 0.0220, 0.0572, 0.0503, 0.0985,
              0.0239, 0.0391, 0.0485, 0.0380, 0.0569, 0.0673, 0.0558, 0.0686, 0.0129, 0.0294, 0]
 
-    elif (background == JSD_background.HUMAN):
+    elif background == JSD_background.HUMAN:
         # Background frequencies from paper (Nathaniel Echols et al. 2002): https://academic.oup.com/bioinformatics/article/21/7/975/268909
         q = [0.077, 0.024, 0.045, 0.064, 0.033, 0.071, 0.026, 0.037, 0.050, 0.099,
              0.021, 0.031, 0.070, 0.048, 0.061, 0.066, 0.054, 0.060, 0.015, 0.023, 0.003]
 
     else:
-        print
-        "Wrong background input"
+        print("Wrong background input")
         return -1
 
     # Make sure it all sums to 1
@@ -101,7 +100,7 @@ def JSD_hist(aa_hist, background=JSD_background.BLOSUM62):
     feqs_vector = [0.00001 + float(prob) for prob in aa_hist]
     p = [f / sum(feqs_vector) for f in feqs_vector]
 
-    assert str(sum(q)) == '1.0' and str(sum(p)) == '1.0', "Prob. vectors do not sum to 1"
+    assert np.allclose(1., sum(q)) and np.allclose(1., sum(p)), "Prob. vectors do not sum to 1"
 
     return JSdiv(p, q)
 
@@ -201,7 +200,7 @@ def SE_hist(aa_ref_hist):
 
     p = [f / sum(feqs_vector) for f in feqs_vector]
 
-    assert str(sum(p)) == '1.0', "Prob. vector do not sum to 1"
+    assert np.allclose(1., sum(p)), "Prob. vector do not sum to 1"
 
     # Compute the Shannon Entropy of residues
     shannon_entropy = - sum(aa_prob * np.log2(aa_prob) for aa_prob in p)

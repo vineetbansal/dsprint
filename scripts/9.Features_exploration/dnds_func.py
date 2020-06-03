@@ -1,7 +1,7 @@
 import pickle
 
 # Read the substitutions table (for the dN/dS calculation)
-with open("codon_ns_table.pik", 'rb') as handle:
+with open("../5.HMM_alter_align/codon_ns_table.pik", 'rb') as handle:
     codon_ns_table = pickle.load(handle)
 
 

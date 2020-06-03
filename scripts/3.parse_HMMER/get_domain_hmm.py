@@ -90,6 +90,9 @@ if __name__ == '__main__':
 
     for domain, _df in allhmm.groupby(['domain_name']):
 
+        if domain not in pfam_df.index:
+            continue
+
         domain_details = pfam_df.loc[domain]
         _df = _df[_df['BitScore'] >= domain_details.GA]
         _df = _df[(_df['HMMStart'] == 1) & (_df['HMMEnd'] == int(domain_details.LENG))]

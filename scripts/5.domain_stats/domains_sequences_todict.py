@@ -14,9 +14,9 @@ except NameError:
 
     DOMAIN_STATS_CSV, HMMS_FOLDER, CANONIC_PROT_FOLDER, OUTPUT_FILE = sys.argv[1:]
 else:
-    DOMAIN_STATS_CSV = snakemake.input[0]
-    HMMS_FOLDER = snakemake.params.hmm_folder
-    CANONIC_PROT_FOLDER = snakemake.params.canonic_prot_folder
+    HMMS_FOLDER = snakemake.input.hmm_folder
+    CANONIC_PROT_FOLDER = snakemake.input.canonic_prot_folder
+    DOMAIN_STATS_CSV = snakemake.input.domains_stats_df
     OUTPUT_FILE = snakemake.output[0]
 
 INSTANCE_THRESHOLD = 10  # lower bound on instances, exclusive

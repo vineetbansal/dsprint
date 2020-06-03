@@ -31,4 +31,4 @@ if __name__ == '__main__':
     merged_df.rename(columns={'mean': 'COVERAGE'}, inplace=True)
 
     merged_df = merged_df[merged_df["COVERAGE"] >= COVERAGE_THRESHOLD]
-    merged_df.to_csv(OUTPUT_FILE)
+    merged_df.to_csv(OUTPUT_FILE, index=False)

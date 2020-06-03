@@ -28,8 +28,7 @@ if __name__ == '__main__':
 
     # Parsing the description field
     description_headers = ["prot", "pep", "chromosome", "gene", "transcript", "gene_biotype", "transcript_biotype",
-                           "hgncID",
-                           "hugoSymbol", "refseq", "entrez", "length", "HMMStart", "HMMEnd"]
+                           "hgncID", "hugoSymbol", "refseq", "entrez", "length", "HMMStart", "HMMEnd"]
     descriptions_parsed = defaultdict(list)
     desc_list = df["Description"].tolist()
 

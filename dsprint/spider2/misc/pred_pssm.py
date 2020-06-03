@@ -134,7 +134,7 @@ def load_nn(file_name):
 	return mat
 
 def load_NN(nn_filename):
-	return numpy.load(nn_filename, encoding='latin1')
+	return numpy.load(nn_filename, encoding='latin1', allow_pickle=True)
 
 	# load in the NN mat file.
 #	import scipy.io

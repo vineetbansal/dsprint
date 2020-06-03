@@ -2,6 +2,8 @@ import os.path
 import pickle
 from collections import defaultdict
 
+from dsprint.core import CHROMOSOMES
+
 try:
     snakemake
 except NameError:
@@ -20,7 +22,7 @@ if __name__ == '__main__':
 
     d = defaultdict(list)
 
-    for chromosome in os.listdir(INPUT_FOLDER):
+    for chromosome in CHROMOSOMES:
         for gene in os.listdir(os.path.join(INPUT_FOLDER, chromosome)):
             gene_dir = os.path.join(INPUT_FOLDER, chromosome, gene)
             for exon_file in os.listdir(gene_dir):

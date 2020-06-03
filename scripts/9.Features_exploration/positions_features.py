@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import pickle
 from collections import defaultdict
+import os.path
 import math
 
 from dnds_func import seq_ns
@@ -11,6 +12,8 @@ from ext_predictors_codes import sift_codes, polyphen_codes, clinvar_codes
 from calc_exac_freq_func import codon_table
 from entropy_func import SE_hist, JSD_background, JSD_hist
 from go_groups import go_term_group
+
+from dsprint.core import POPULATIONS_ANS,POPULATIONS_ACS
 
 
 def ExAC_MAF_features(features_dict, state_id, table_columns, sites_aa_num, sites_aa_alter_num, maf_list):
@@ -55,7 +58,7 @@ def ExAC_population_features(features_dict, state_id, table_columns, ac_sum, ac_
 
     # Feature: populations syn maf avg
     for i in range(len(an_str)):
-        if (len(pop_maf_syn_list[i]) == 0):
+        if len(pop_maf_syn_list[i]) == 0:
             avg_pop_maf_syn = 0
         else:
             avg_pop_maf_syn = np.average(pop_maf_syn_list[i])
@@ -64,7 +67,7 @@ def ExAC_population_features(features_dict, state_id, table_columns, ac_sum, ac_
 
     # Feature: populations non-syn maf avg
     for i in range(len(an_str)):
-        if (len(pop_maf_nonsyn_list[i]) == 0):
+        if len(pop_maf_nonsyn_list[i]) == 0:
             avg_pop_maf_nonsyn = 0
         else:
             avg_pop_maf_nonsyn = np.average(pop_maf_nonsyn_list[i])
@@ -75,7 +78,7 @@ def ExAC_population_features(features_dict, state_id, table_columns, ac_sum, ac_
 def ExAC_count_features(features_dict, state_id, table_columns, sites_aa_num, sites_aa_alter_num,
                         sites_snp_num, sites_snp_alter_num):
     # Feature: number of alterations - aa level (raw and normalized by total number of matched positions)
-    if (sites_aa_num == 0):
+    if sites_aa_num == 0:
         norm_aa_alter_num = 0
     else:
         norm_aa_alter_num = sites_aa_alter_num / float(sites_aa_num)
@@ -85,7 +88,7 @@ def ExAC_count_features(features_dict, state_id, table_columns, sites_aa_num, si
     table_columns.append("alter_num_aa_norm")
 
     # Feature: number of alterations - DNA level (raw and normalized by total number of matched positions)
-    if (sites_snp_num == 0):
+    if sites_snp_num == 0:
         norm_snp_alter_num = 0
     else:
         norm_snp_alter_num = sites_snp_alter_num / float(sites_snp_num)
@@ -1130,34 +1133,16 @@ def spider_half_sphere_exposure_pred(features_dict, state_id, table_columns, spi
     table_columns.append("hsb2_HSE-down_std")
 
 
-def whole_domain_conservation(features_dict, state_id, table_columns, domain_name):
+def whole_domain_conservation(features_dict, state_id, table_columns, states_dict):
     # ===Features: phastCons and PhyloP whole-domain average and std===#
-    features_dict[state_id].append(whole_domain_con_dict[domain_name]["phastCons_mean"])
+    features_dict[state_id].append(states_dict["_phastCons_mean"])
     table_columns.append("whole_domain_phastCons_avg")
-    features_dict[state_id].append(whole_domain_con_dict[domain_name]["phastCons_std"])
+    features_dict[state_id].append(states_dict["_phastCons_std"])
     table_columns.append("whole_domain_phastCons_std")
-    features_dict[state_id].append(whole_domain_con_dict[domain_name]["phyloP_mean"])
+    features_dict[state_id].append(states_dict["_phyloP_mean"])
     table_columns.append("whole_domain_phyloP_avg")
-    features_dict[state_id].append(whole_domain_con_dict[domain_name]["phyloP_std"])
+    features_dict[state_id].append(states_dict["_phyloP_std"])
     table_columns.append("whole_domain_phyloP_std")
-
-
-def whole_domain_GO_group(features_dict, state_id, table_columns, domain_name):
-    # ===Feature: domain groups (based on GO analysis)===#
-    GO_groups_vec = [0] * len(go_term_group)
-
-    if whole_domain_GO_dict.has_key(domain_name):
-        domain_GO_groups = whole_domain_GO_dict[domain_name]
-        for group in domain_GO_groups:
-            group_val = group.value
-            GO_groups_vec[group_val] = 1
-    # If the domain doesn't have any of the GO terms we defined, adding +1 to NO_TERM
-    else:
-        GO_groups_vec[go_term_group.NO_TERM.value] = 1
-
-    features_dict[state_id].extend(GO_groups_vec)
-    for term in go_term_group:
-        table_columns.append("GO:" + term.name)
 
 
 def domain_location_features(features_dict, state_id, table_columns, state, max_state):
@@ -1175,9 +1160,9 @@ def domain_location_features(features_dict, state_id, table_columns, state, max_
     MIDDLE_POS = 1
     END_POS = 2
     domain_location_bins = np.histogram(np.arange(1, max_state), bins=3)[1]
-    if (state < domain_location_bins[1]):
+    if state < domain_location_bins[1]:
         location_list[BEGIN_POS] = 1
-    elif (state > domain_location_bins[2]):
+    elif state > domain_location_bins[2]:
         location_list[END_POS] = 1
     else:
         location_list[MIDDLE_POS] = 1
@@ -1199,9 +1184,9 @@ def protein_location_features(features_dict, state_id, table_columns, protein_po
     END_POS = 2
     for i in range(len(protein_pos_list)):
         prot_location_bins = np.histogram(np.arange(1, protein_len_list[i]), bins=3)[1]
-        if (protein_pos_list[i] < prot_location_bins[1]):
+        if protein_pos_list[i] < prot_location_bins[1]:
             location_list[BEGIN_POS] += 1
-        elif (protein_pos_list[i] > prot_location_bins[2]):
+        elif protein_pos_list[i] > prot_location_bins[2]:
             location_list[END_POS] += 1
         else:
             location_list[MIDDLE_POS] += 1
@@ -1216,7 +1201,7 @@ def protein_location_features(features_dict, state_id, table_columns, protein_po
 if __name__ == '__main__':
 
     table_columns = []
-    HMM_STATES_FOLDER = '/media/vineetb/t5-vineetb/dsprint/out/pfam/32/hmm_states'
+    HMM_STATES_FOLDER = '/media/vineetb/t5-vineetb/dsprint/out/pfam/33/hmm_states_5'
     domain = 'ig'
 
     SIFT_THRESHOLD = 0.05
@@ -1226,7 +1211,6 @@ if __name__ == '__main__':
     MAFT_05 = 0.0005
     MAFT_005 = 0.00005
 
-    hmm_filename = "domains_hmm_prob_dict.pik"
     pfam_aa_order = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
     amino_acids_sym = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y',
                        "*"]
@@ -1239,21 +1223,12 @@ if __name__ == '__main__':
     with open("../substitution_matrices/PAM40_dict.pik", 'rb') as f:
         pam40_dict = pickle.load(f)
 
-    # Read the whole-domain conservation dict
-    with open("8.Whole_domain_analysis/pfam/32/domain_conservation_dict.pik", 'rb') as f:
-        whole_domain_con_dict = pickle.load(f)
-
-    # Read the whole_domain GO classification dict
-    with open("8.Whole_domain_analysis/pfam/32/domain_go_dict.pik", 'rb') as f:
-        whole_domain_GO_dict = pickle.load(f)
-
-    # Open the HMM dict - takes some time
-    with open(hmm_filename, 'rb') as f:
+    with open('/media/vineetb/t5-vineetb/dsprint/out/pfam/33/domains_hmm_prob_dict.pik', 'rb') as f:
         hmm_prob_dict = pickle.load(f)
 
     features_dict = defaultdict(list)
-    an_str = ["an_afr", "an_amr", "an_eas", "an_fin", "an_nfe", "an_oth", "an_sas"]
-    ac_str = ["ac_afr", "ac_amr", "ac_eas", "ac_fin", "ac_nfe", "ac_oth", "ac_sas"]
+    an_str = POPULATIONS_ANS
+    ac_str = POPULATIONS_ACS
     domains = [domain]
 
     # Randomize numbers to create id feature
@@ -1264,20 +1239,20 @@ if __name__ == '__main__':
     for i in range(len(domains)):
         domain_name = domains[i]
 
-        dirfiles = []
-        filename = dirfiles[0]
-        with open(HMM_STATES_FOLDER, f'{domain_name}.pik', 'rb') as handle:
+        with open(os.path.join(HMM_STATES_FOLDER, f'{domain_name}.pik'), 'rb') as handle:
             states_dict = pickle.load(handle)
 
         # Create af_adj flat dict
         states_af_adj_dict = defaultdict(list)
         for state in states_dict.keys():
+            if str(state).startswith('_'): continue
             for d in states_dict[state]:
                 states_af_adj_dict[state].append(d["af_adj"])
 
         # scale the af_dict
         states_MAF_adj_dict_scaled = defaultdict(list)
         for state in states_dict.keys():
+            if str(state).startswith('_'): continue
             state_len = len(states_dict[state])
             for d in states_dict[state]:
                 states_MAF_adj_dict_scaled[state].append(float(d["af_adj"] / state_len))
@@ -1289,13 +1264,13 @@ if __name__ == '__main__':
             prob_list = hmm_prob_dict[domain_name][state]
             for i in range(len(prob_list)):
                 p = prob_list[i]
-                if (p > con_threshold):
+                if p > con_threshold:
                     major_allele = pfam_aa_order[i]
                     con_states_dict[state] = major_allele
 
         # Adding states features
-        for state in states_dict.keys():
-
+        for state in states_dict:
+            if str(state).startswith('_'): continue
             state_id = domain_name + "_" + str(state)
 
             # Init counters & paramters
@@ -1520,7 +1495,7 @@ if __name__ == '__main__':
                     curr_clinsig_list = d["clin_sig"]
                     for i in range(len(curr_clinsig_list)):
                         s = curr_clinsig_list[i]
-                        if (s != ""):
+                        if s != "":
                             try:
                                 s_af = bp_af_adj_dict[d["bp_list"][i]]
                             except:
@@ -1536,7 +1511,7 @@ if __name__ == '__main__':
                         ref_aa = d["aa_ref"]
                         alt_bp = d["bp_list"][i]
                         alt_aa = codon_table[alt_bp.upper()]
-                        if (alt_aa == ref_aa):
+                        if alt_aa == ref_aa:
                             syn_idx.append(i)
                         else:
                             nonsyn_idx.append(i)
@@ -1650,17 +1625,16 @@ if __name__ == '__main__':
             spider_half_sphere_exposure_pred(features_dict, state_id, table_columns, spider_dict)
 
             # ===Whole-domain aggregated features===#
-            whole_domain_conservation(features_dict, state_id, table_columns, domain_name)
-            whole_domain_GO_group(features_dict, state_id, table_columns, domain_name)
+            whole_domain_conservation(features_dict, state_id, table_columns, states_dict)
 
             # ===Position and location features===#
 
-            domain_location_features(features_dict, state_id, table_columns, state, max(states_dict.keys()))
+            domain_location_features(features_dict, state_id, table_columns, state, max([k for k in states_dict if isinstance(k, int)]))
             protein_location_features(features_dict, state_id, table_columns, protein_pos_list, protein_len_list)
 
     # Exporting to data-frames table
     domains_features_df = pd.DataFrame.from_dict(features_dict, orient='index')
-    domains_features_df.columns = table_columns
+    domains_features_df.columns = table_columns[:domains_features_df.shape[1]]
     domains_features_df = domains_features_df.sort_index()
 
     # Once for ALL domains, save df

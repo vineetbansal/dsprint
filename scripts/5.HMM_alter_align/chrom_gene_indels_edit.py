@@ -17,10 +17,9 @@ except NameError:
     DOMAIN_STATES_DF, CHROMOSOME_PATH, CANONIC_PROT_FOLDER, HMM_FOLDER, FRAMESHIFT_FILE, OUTPUT_PATH = sys.argv[1:]
 else:
     DOMAIN_STATES_DF, CHROMOSOME_PATH, CANONIC_PROT_FOLDER, HMM_FOLDER, FRAMESHIFT_FILE = snakemake.input
-    CHROMOSOME = os.path.splitext(os.path.basename(CHROMOSOME_PATH)[len('parsed_filtered_chrom'):])[0]
-    OUTPUT = str(snakemake.output[0])
-    OUTPUT_PATH = os.path.dirname(OUTPUT)
+    OUTPUT_PATH = str(snakemake.output[0])
 
+CHROMOSOME = os.path.splitext(os.path.basename(CHROMOSOME_PATH)[len('parsed_filtered_chrom'):])[0]
 
 if __name__ == '__main__':
 
@@ -33,7 +32,7 @@ if __name__ == '__main__':
     chrom_csv.fillna('', inplace=True)
     chrom_csv['COMMENTS'] = ''
 
-    os.makedirs(OUTPUT, exist_ok=True)  # just for snakemake
+    os.makedirs(OUTPUT_PATH, exist_ok=True)
 
     for domain_name in all_domains_list:
 
