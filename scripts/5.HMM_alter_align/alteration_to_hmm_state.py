@@ -184,7 +184,7 @@ def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom,
                     alt_aa = codon_table[alt_codon.upper()]
 
                 if exac_prot_data and exac_alt_aa != alt_aa:
-                    print (f"{chrom_pos} Error: the ExAC alt aa {exac_alt_aa} doesn't match my alt aa calculation {alt_aa}")
+                    print(f"{chrom_pos} Error: the ExAC alt aa {exac_alt_aa} doesn't match my alt aa calculation {alt_aa}")
 
                 # Calculating the allele frequency adjusted
                 af_adj = calculate_af_adj(an_adj, ac_adj)
@@ -210,8 +210,8 @@ def calc_exac_maf_data(chrom_pos_list, chrom_gene_table, protein_pos, aa, chrom,
 
                 # Saving the SIFT and PolyPhen scores (for both syn and nonsyn)
                 res_dict["SIFT"].append(chrom_alter["SIFT"])
-                # res_dict["PolyPhen"].append(chrom_alter["PolyPhen"])
-                # res_dict["clin_sig"].append(chrom_alter["clin_sig"])
+                res_dict["PolyPhen"].append(chrom_alter["POLYPHEN"])
+                res_dict["clin_sig"].append(chrom_alter["CLIN_SIG"])
 
                 # Saving SwissProt id and Ensembl prot id
                 res_dict["SwissProt"].append(chrom_alter["SWISSPROT"])

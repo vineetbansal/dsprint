@@ -3,221 +3,146 @@ import numpy as np
 import pickle
 from collections import defaultdict
 import os.path
-import math
-
+from scipy.stats import entropy
+from Bio.SeqUtils.ProtParamData import kd
 from dnds_func import seq_ns
-from aa_chemical_properties import aa_charge, aa_charge_dict, aa_functional_group, aa_functional_group_dict, hindex_Kyte_Doolitle, aa_propensity,\
+from aa_chemical_properties import aa_charge, aa_charge_dict, aa_functional_group, aa_functional_group_dict, aa_propensity,\
                                     propensity_chou_fasman, aa_volume_group, aa_volume, aa_volume_group_dict, aa_h_bond_donor, aa_h_bond_acceptor
 from ext_predictors_codes import sift_codes, polyphen_codes, clinvar_codes
 from calc_exac_freq_func import codon_table
 from entropy_func import SE_hist, JSD_background, JSD_hist
-from go_groups import go_term_group
 
 from dsprint.core import POPULATIONS_ANS,POPULATIONS_ACS
 
+SIFT_THRESHOLD = 0.05
 
-def ExAC_MAF_features(features_dict, state_id, table_columns, sites_aa_num, sites_aa_alter_num, maf_list):
-    # Feature: avg MAF
-    if (sites_aa_num == 0):
-        avg_maf_overall = 0
-    else:
-        avg_maf_overall = np.sum(maf_list) / float(sites_aa_num)
-    features_dict[state_id].append(avg_maf_overall)
-    table_columns.append("avg_maf_all")
+# Rare SNP thresholds
+MAFT_5 = 0.005
+MAFT_05 = 0.0005
+MAFT_005 = 0.00005
 
-    # Feature: avg MAF of all the altered sites
-    if sites_aa_alter_num == 0:
-        avg_maf_only_altered = 0
-    else:
-        avg_maf_only_altered = np.sum(maf_list) / float(sites_aa_alter_num)
-    features_dict[state_id].append(avg_maf_only_altered)
-    table_columns.append("avg_maf_altered")
+pfam_aa_order = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
+AMINO_ACIDS = pfam_aa_order + ['*']
+
+
+def ExAC_MAF_features(sites_aa_num, sites_aa_alter_num, maf_list):
+
+    d = {}
+
+    # avg MAF
+    d['avg_maf_all'] = 0 if sites_aa_num == 0 else np.sum(maf_list) / float(sites_aa_num)
+
+    # avg MAF of all the altered sites
+    d['avg_maf_altered'] = 0 if sites_aa_alter_num == 0 else np.sum(maf_list) / float(sites_aa_alter_num)
 
     bins = [0, 0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.2, 0.5]
     non_zero_maf_lst = np.array(maf_list)[np.nonzero(maf_list)[0].tolist()]
-
     maf_hist = np.histogram(non_zero_maf_lst, bins)[0]
 
-    features_dict[state_id].extend(maf_hist)
-    for i in range(len(bins) - 1):
-        hist_col_title = "maf_hist_" + str(bins[i]) + "-" + str(bins[i + 1])
-        table_columns.append(hist_col_title)
+    for i, maf_hist_value in enumerate(maf_hist):
+        d['maf_hist_' + str(bins[i]) + '-' + str(bins[i + 1])] = maf_hist_value
+
+    return d
 
 
-def ExAC_population_features(features_dict, state_id, table_columns, ac_sum, ac_sum_syn, ac_sum_nonsyn,
-                             an_list, pop_maf_list, pop_maf_syn_list, pop_maf_nonsyn_list):
+def ExAC_population_features(pop_maf_list, pop_maf_syn_list, pop_maf_nonsyn_list):
 
-    # Feature: populations total maf avg
+    d = {}
+
     for i in range(len(an_str)):
-        if (len(pop_maf_list[i]) == 0):
-            avg_pop_maf = 0
-        else:
-            avg_pop_maf = np.average(pop_maf_list[i])
-        features_dict[state_id].append(avg_pop_maf)
-        table_columns.append("maf_" + an_str[i][3:])
+        # populations total maf avg
+        d['maf_' + an_str[i][3:]] = 0 if len(pop_maf_list[i]) == 0 else np.average(pop_maf_list[i])
 
-    # Feature: populations syn maf avg
     for i in range(len(an_str)):
-        if len(pop_maf_syn_list[i]) == 0:
-            avg_pop_maf_syn = 0
-        else:
-            avg_pop_maf_syn = np.average(pop_maf_syn_list[i])
-        features_dict[state_id].append(avg_pop_maf_syn)
-        table_columns.append("maf_syn_" + an_str[i][3:])
+        # populations syn maf avg
+        d['maf_syn_' + an_str[i][3:]] = 0 if len(pop_maf_syn_list[i]) == 0 else np.average(pop_maf_syn_list[i])
 
-    # Feature: populations non-syn maf avg
     for i in range(len(an_str)):
-        if len(pop_maf_nonsyn_list[i]) == 0:
-            avg_pop_maf_nonsyn = 0
-        else:
-            avg_pop_maf_nonsyn = np.average(pop_maf_nonsyn_list[i])
-        features_dict[state_id].append(avg_pop_maf_nonsyn)
-        table_columns.append("maf_nonsyn_" + an_str[i][3:])
+        # populations non-syn maf avg
+        d['maf_nonsyn_' + an_str[i][3:]] = 0 if len(pop_maf_nonsyn_list[i]) == 0 else np.average(pop_maf_nonsyn_list[i])
+
+    return d
 
 
-def ExAC_count_features(features_dict, state_id, table_columns, sites_aa_num, sites_aa_alter_num,
-                        sites_snp_num, sites_snp_alter_num):
+def ExAC_count_features(sites_aa_num, sites_aa_alter_num, sites_snp_num, sites_snp_alter_num):
+
+    d = {}
+
     # Feature: number of alterations - aa level (raw and normalized by total number of matched positions)
-    if sites_aa_num == 0:
-        norm_aa_alter_num = 0
-    else:
-        norm_aa_alter_num = sites_aa_alter_num / float(sites_aa_num)
-    features_dict[state_id].append(sites_aa_alter_num)
-    table_columns.append("alter_num_aa")
-    features_dict[state_id].append(norm_aa_alter_num)
-    table_columns.append("alter_num_aa_norm")
+    d['alter_num_aa'] = sites_aa_alter_num
+    d['alter_num_aa_norm'] = 0 if sites_aa_num == 0 else sites_aa_alter_num / float(sites_aa_num)
 
     # Feature: number of alterations - DNA level (raw and normalized by total number of matched positions)
-    if sites_snp_num == 0:
-        norm_snp_alter_num = 0
-    else:
-        norm_snp_alter_num = sites_snp_alter_num / float(sites_snp_num)
-    features_dict[state_id].append(sites_snp_alter_num)
-    table_columns.append("alter_num_snp")
-    features_dict[state_id].append(norm_snp_alter_num)
-    table_columns.append("alter_num_snp_norm")
+    d['alter_num_snp'] = sites_snp_alter_num
+    d['alter_num_snp_norm'] = 0 if sites_snp_num == 0 else sites_snp_alter_num / float(sites_snp_num)
 
     # Feature: average number of poymorphisms at one site
-    if sites_aa_alter_num == 0:
-        avg_poly_aa = 0
-    else:
-        avg_poly_aa = sites_poly_aa_num / float(sites_aa_alter_num)
-    features_dict[state_id].append(avg_poly_aa)
-    table_columns.append("avg_aa_polymorphisms")
+    d['avg_aa_polymorphisms'] = 0 if sites_aa_alter_num == 0 else sites_poly_aa_num / float(sites_aa_alter_num)
 
     # Feature: fraction of altered sites with more than 1 polymorphism
-    if sites_aa_alter_num == 0:
-        frac_poly_several = 1
-    else:
-        frac_poly_several = sites_poly_aa_several / float(sites_aa_alter_num)
-    features_dict[state_id].append(frac_poly_several)
-    table_columns.append("frac_poly_aa")
+    d['frac_poly_aa'] = 1 if sites_aa_alter_num == 0 else sites_poly_aa_several / float(sites_aa_alter_num)
+
+    return d
 
 
-def ExAC_rareSNP_features(features_dict, state_id, table_columns, sites_snp_alter_num, rare_5_num,
-                          rare_05_num, rare_005_num):
+def ExAC_rareSNP_features(sites_snp_alter_num, rare_5_num, rare_05_num, rare_005_num):
+
     # Feature: fraction of rare SNPs (0.5%, 0.05%, 0.005%)
-    if (sites_snp_alter_num == 0):
-        frac_rare_5 = 0
-        frac_rare_05 = 0
-        frac_rare_005 = 0
-    else:
-        frac_rare_5 = rare_5_num / float(sites_snp_alter_num)
-        frac_rare_05 = rare_05_num / float(sites_snp_alter_num)
-        frac_rare_005 = rare_005_num / float(sites_snp_alter_num)
-
-    features_dict[state_id].append(frac_rare_5)
-    table_columns.append("rare_poly_0.5")
-    features_dict[state_id].append(frac_rare_05)
-    table_columns.append("rare_poly_0.05")
-    features_dict[state_id].append(frac_rare_005)
-    table_columns.append("rare_poly_0.005")
+    return {
+        'rare_poly_0.5': 0 if sites_snp_alter_num == 0 else rare_5_num / float(sites_snp_alter_num),
+        'rare_poly_0.05': 0 if sites_snp_alter_num == 0 else rare_05_num / float(sites_snp_alter_num),
+        'rare_poly_0.005': 0 if sites_snp_alter_num == 0 else rare_005_num / float(sites_snp_alter_num)
+    }
 
 
-def conservation_features(features_dict, state_id, table_columns, phastCons_dict, phyloP_dict):
-    # Features: conservation scores avg for each codon position - phastCons
-    features_dict[state_id].append(np.nanmean(phastCons_dict[1]))
-    table_columns.append("phastCons1_avg")
-    features_dict[state_id].append(np.nanmean(phastCons_dict[2]))
-    table_columns.append("phastCons2_avg")
-    features_dict[state_id].append(np.nanmean(phastCons_dict[3]))
-    table_columns.append("phastCons3_avg")
+def conservation_features(phastCons_dict, phyloP_dict):
 
-    # Features: conservation scores avg for each codon position - phyloP
-    features_dict[state_id].append(np.nanmean(phyloP_dict[1]))
-    table_columns.append("phyloP1_avg")
-    features_dict[state_id].append(np.nanmean(phyloP_dict[2]))
-    table_columns.append("phyloP2_avg")
-    features_dict[state_id].append(np.nanmean(phyloP_dict[3]))
-    table_columns.append("phyloP3_avg")
+    d = {}
+    positions = 1, 2, 3  # codon positions
+
+    phastCons = np.vstack(phastCons_dict[p] for p in positions)
+    phyloP = np.vstack(phyloP_dict[p] for p in positions)
+
+    # conservation scores avg for each codon position
+    phastCons_mean = np.nanmean(phastCons, axis=1)
+    for p in positions:
+        d[f'phastCons{p}_avg'] = phastCons_mean[p-1]
+
+    phyloP_mean = np.nanmean(phyloP, axis=1)
+    for p in positions:
+        d[f'phyloP{p}_avg'] = phyloP_mean[p-1]
 
     # Features: conservation scores histograms for each codon position - phastCons
     phastCons_bins = np.concatenate((np.linspace(0, 0.75, 4), np.linspace(0.8, 1.0, 5)), axis=0)
-    phastCons1_hist = np.histogram(np.array(phastCons_dict[1])[~np.isnan(phastCons_dict[1])], phastCons_bins)[0]
-    phastCons2_hist = np.histogram(np.array(phastCons_dict[2])[~np.isnan(phastCons_dict[2])], phastCons_bins)[0]
-    phastCons3_hist = np.histogram(np.array(phastCons_dict[3])[~np.isnan(phastCons_dict[3])], phastCons_bins)[0]
-
-    features_dict[state_id].extend(phastCons1_hist)
-    features_dict[state_id].extend(phastCons2_hist)
-    features_dict[state_id].extend(phastCons3_hist)
-    for i in range(len(phastCons_bins) - 1):
-        hist_col_title = "phastCons1_hist_" + str(phastCons_bins[i]) + "-" + str(phastCons_bins[i + 1])
-        table_columns.append(hist_col_title)
-    for i in range(len(phastCons_bins) - 1):
-        hist_col_title = "phastCons2_hist_" + str(phastCons_bins[i]) + "-" + str(phastCons_bins[i + 1])
-        table_columns.append(hist_col_title)
-    for i in range(len(phastCons_bins) - 1):
-        hist_col_title = "phastCons3_hist_" + str(phastCons_bins[i]) + "-" + str(phastCons_bins[i + 1])
-        table_columns.append(hist_col_title)
+    for p in positions:
+        hist, _ = np.histogram(phastCons[p-1, :], phastCons_bins)
+        for i, hist_value in enumerate(hist):
+            d[f'phastCons{p}_hist_{phastCons_bins[i]}-{phastCons_bins[i+1]}'] = hist_value
 
     # Features: conservation scores histograms for each codon position - phyloP
     phyloP_bins = np.concatenate((np.array([-14, -1]), np.linspace(0, 3, 4), np.linspace(3.5, 6, 6)), axis=0)
-    phyloP_hist1 = np.histogram(np.array(phyloP_dict[1])[~np.isnan(phyloP_dict[1])], phyloP_bins)[0]
-    phyloP_hist2 = np.histogram(np.array(phyloP_dict[2])[~np.isnan(phyloP_dict[2])], phyloP_bins)[0]
-    phyloP_hist3 = np.histogram(np.array(phyloP_dict[3])[~np.isnan(phyloP_dict[3])], phyloP_bins)[0]
-
-    features_dict[state_id].extend(phyloP_hist1)
-    features_dict[state_id].extend(phyloP_hist2)
-    features_dict[state_id].extend(phyloP_hist3)
-    for i in range(len(phyloP_bins) - 1):
-        hist_col_title = "phyloP1_hist_" + str(phyloP_bins[i]) + "-" + str(phyloP_bins[i + 1])
-        table_columns.append(hist_col_title)
-    for i in range(len(phyloP_bins) - 1):
-        hist_col_title = "phyloP2_hist_" + str(phyloP_bins[i]) + "-" + str(phyloP_bins[i + 1])
-        table_columns.append(hist_col_title)
-    for i in range(len(phyloP_bins) - 1):
-        hist_col_title = "phyloP3_hist_" + str(phyloP_bins[i]) + "-" + str(phyloP_bins[i + 1])
-        table_columns.append(hist_col_title)
+    for p in positions:
+        hist, _ = np.histogram(phyloP[p-1, :], phyloP_bins)
+        for i, hist_value in enumerate(hist):
+            d[f'phyloP{p}_hist_{phyloP_bins[i]}-{phyloP_bins[i+1]}'] = hist_value
 
     # Features: histogram of avg in each codon
-    phastCons_codons_avg = []
-    phyloP_codons_avg = []
-    for i in range(len(phastCons_dict[1])):
-        phastCons_score_avg = np.nanmean([phastCons_dict[1][i], phastCons_dict[2][i], phastCons_dict[3][i]])
-        phastCons_codons_avg.append(phastCons_score_avg)
-        phyloP_score_avg = np.nanmean([phyloP_dict[1][i], phyloP_dict[2][i], phyloP_dict[3][i]])
-        phyloP_codons_avg.append(phyloP_score_avg)
+    phastCons_codons_avg = np.nanmean(phastCons, axis=0)
+    hist, _ = np.histogram(phastCons_codons_avg, phastCons_bins)
+    for i, hist_value in enumerate(hist):
+        d[f'phastCons_codons_hist_{phastCons_bins[i]}-{phastCons_bins[i+1]}'] = hist_value
 
-    phastCons_codons_hist = np.histogram(phastCons_codons_avg, phastCons_bins)[0]
-    phyloP_codons_hist = np.histogram(phyloP_codons_avg, phyloP_bins)[0]
+    phyloP_codons_avg0 = np.nanmean(phyloP, axis=0)
+    hist, _ = np.histogram(phyloP_codons_avg0, phyloP_bins)
+    for i, hist_value in enumerate(hist):
+        d[f'phyloP_codons_hist_{phyloP_bins[i]}-{phyloP_bins[i+1]}'] = hist_value
 
-    features_dict[state_id].extend(phastCons_codons_hist)
-    features_dict[state_id].extend(phyloP_codons_hist)
-    for i in range(len(phastCons_bins) - 1):
-        hist_col_title = "phastCons_codons_hist_" + str(phastCons_bins[i]) + "-" + str(phastCons_bins[i + 1])
-        table_columns.append(hist_col_title)
-    for i in range(len(phyloP_bins) - 1):
-        hist_col_title = "phyloP_codons_hist_" + str(phyloP_bins[i]) + "-" + str(phyloP_bins[i + 1])
-        table_columns.append(hist_col_title)
+    return d
 
 
-def sub_matrix_features(features_dict, state_id, table_columns, sub_list, weigted_sub_list, sub_name):
+def sub_matrix_features(sub_list, weigted_sub_list, sub_name):
     if len(sub_list) == 0:
-        sub_avg = 0
-        weigted_sub_avg = 0
-        sub_postivies = 0
-        sub_negatives = 0
-        sub_ratio = 1
+        sub_avg = weigted_sub_avg = sub_postivies = sub_negatives = sub_ratio = 1
     else:
         # Feature: BLOSUM62 average and frequency weighted-average
         sub_avg = sum(sub_list) / float(len(sub_list))
@@ -228,24 +153,21 @@ def sub_matrix_features(features_dict, state_id, table_columns, sub_list, weigte
         sub_negatives = sum(1 for x in sub_list if x < 0)
 
         # Feature: BLOSUM62 positives/negatives ratio
-        if (sub_postivies == 0 or sub_negatives == 0):
+        if sub_postivies == 0 or sub_negatives == 0:
             sub_ratio = 0
         else:
             sub_ratio = sub_postivies / float(sub_negatives)
 
-    features_dict[state_id].append(sub_avg)
-    table_columns.append(sub_name + "_avg")
-    features_dict[state_id].append(weigted_sub_avg)
-    table_columns.append(sub_name + "_avg_weighted")
-    features_dict[state_id].append(sub_postivies)
-    table_columns.append(sub_name + "_positive_num")
-    features_dict[state_id].append(sub_negatives)
-    table_columns.append(sub_name + "_negative_num")
-    features_dict[state_id].append(sub_ratio)
-    table_columns.append(sub_name + "_ratio")
+    return {
+        f'{sub_name}_avg': sub_avg,
+        f'{sub_name}_avg_weighted': weigted_sub_avg,
+        f'{sub_name}_positive_num': sub_postivies,
+        f'{sub_name}_negative_num': sub_negatives,
+        f'{sub_name}_ratio': sub_ratio
+    }
 
 
-def SIFT_features(features_dict, state_id, table_columns, sift_scores_list, weighted_sift_scores_list):
+def SIFT_features(sift_scores_list, weighted_sift_scores_list):
     if len(sift_scores_list) > 0:
         # Feature: SIFT average
         sift_avg = np.mean(sift_scores_list)
@@ -280,23 +202,18 @@ def SIFT_features(features_dict, state_id, table_columns, sift_scores_list, weig
         sift_ratio = 1
         sift_majority = sift_codes.SIFT_TIE.value
 
-    features_dict[state_id].append(sift_avg)
-    table_columns.append("sift_avg")
-    features_dict[state_id].append(sift_w_avg)
-    table_columns.append("sift_avg_weighted")
-    features_dict[state_id].append(sift_deleterious_num)
-    table_columns.append("sift_deleterious_num")
-    features_dict[state_id].append(sift_tolerated_num)
-    table_columns.append("sift_tolerated_num")
-    features_dict[state_id].append(sift_ratio)
-    table_columns.append("sift_ratio")
-    features_dict[state_id].append(sift_majority)
-    table_columns.append("sift_majority")
+    return {
+        'sift_avg': sift_avg,
+        'sift_avg_weighted': sift_w_avg,
+        'sift_deleterious_num': sift_deleterious_num,
+        'sift_tolerated_num': sift_tolerated_num,
+        'sift_ratio': sift_ratio,
+        'sift_majority': sift_majority
+    }
 
 
-def PolyPhen_features(features_dict, state_id, table_columns, polyphen_scores_list, polyphen_pred_list,
-                      weighted_polyphen_scores_list):
-    if (len(polyphen_scores_list) > 0):
+def PolyPhen_features(polyphen_scores_list, polyphen_pred_list, weighted_polyphen_scores_list):
+    if len(polyphen_scores_list) > 0:
         # Feature: PolyPhen average
         polyphen_avg = np.mean(polyphen_scores_list)
 
@@ -321,10 +238,10 @@ def PolyPhen_features(features_dict, state_id, table_columns, polyphen_scores_li
               (polyphen_probably_num > polyphen_benign_num and polyphen_probably_num == polyphen_possibly_num)):
             polyphen_majority = polyphen_codes.POLYPHEN_PROBABLY.value
 
-        elif (polyphen_possibly_num > polyphen_benign_num and polyphen_possibly_num > polyphen_probably_num):
+        elif polyphen_possibly_num > polyphen_benign_num and polyphen_possibly_num > polyphen_probably_num:
             polyphen_majority = polyphen_codes.POLYPHEN_POSSIBLY.value
 
-        elif (polyphen_benign_num == polyphen_probably_num == polyphen_possibly_num):
+        elif polyphen_benign_num == polyphen_probably_num == polyphen_possibly_num:
             polyphen_majority = polyphen_codes.PLOYPHEN_EQUAL.value
 
         else:
@@ -337,21 +254,17 @@ def PolyPhen_features(features_dict, state_id, table_columns, polyphen_scores_li
         polyphen_probably_num = 0
         polyphen_majority = polyphen_codes.POLYPHEN_UNKNOWN.value
 
-    features_dict[state_id].append(polyphen_avg)
-    table_columns.append("polyphen_avg")
-    features_dict[state_id].append(polyphen_w_avg)
-    table_columns.append("polyphen_avg_weighted")
-    features_dict[state_id].append(polyphen_benign_num)
-    table_columns.append("polyphen_benign_num")
-    features_dict[state_id].append(polyphen_possibly_num)
-    table_columns.append("polyphen_possibly_num")
-    features_dict[state_id].append(polyphen_probably_num)
-    table_columns.append("polyphen_probably_num")
-    features_dict[state_id].append(polyphen_majority)
-    table_columns.append("polyphen_majority")
+    return {
+        'polyphen_avg': polyphen_avg,
+        'polyphen_avg_weighted': polyphen_w_avg,
+        'polyphen_benign_num': polyphen_benign_num,
+        'polyphen_possibly_num': polyphen_possibly_num,
+        'polyphen_probably_num': polyphen_probably_num,
+        'polyphen_majority': polyphen_majority
+    }
 
 
-def ClinVar_scores(features_dict, state_id, table_columns, clinsig_list, clinsig_af):
+def ClinVar_scores(clinsig_list, clinsig_af):
     valid_scores = []
     valid_scores_weighted = []
 
@@ -359,7 +272,7 @@ def ClinVar_scores(features_dict, state_id, table_columns, clinsig_list, clinsig
         sig = clinsig_list[i]
         sig_list = pd.Series(sig.split("&")).unique().tolist()
         # Skipping
-        if ("not" in sig_list or "" in sig_list):
+        if "not" in sig_list or "" in sig_list:
             continue
 
         # Determine the alteration clinvar score
@@ -388,113 +301,76 @@ def ClinVar_scores(features_dict, state_id, table_columns, clinsig_list, clinsig
         avg_clinvar_score = np.mean(valid_scores)
         avg_w_clinvar_score = np.mean(valid_scores_weighted)
 
-    features_dict[state_id].append(avg_clinvar_score)
-    table_columns.append("avg_clinvar_score")
-    features_dict[state_id].append(avg_w_clinvar_score)
-    table_columns.append("avg_clinvar_weighted")
+    return {
+        'avg_clinvar_score': avg_clinvar_score,
+        'avg_clinvar_weighted': avg_w_clinvar_score
+    }
 
 
-# Calculates a normalized Shannon entropy (from Miller et al, 2015)
-def entropy(a):
-    if len(a) == 1:
-        return 0  # Min entropy - all the change is in one value
-
-    a = np.asarray(a) / float(sum(a))
-    entropy = 0
-
-    for val in a:
-        if val == 0 or np.isnan(val):
-            continue
-        if val < 0:
-            print(a)
-        entropy += val * math.log(val)
-
-    entropy_adj = -entropy / math.log(len(a))  # To account for different size input
-
-    return entropy_adj
-
-
-def entropy_features(features_dict, state_id, table_columns, maf_list):
-    # Feature: entropy of nonsyn SNPs distributed across instances
-    if np.sum(maf_list) == 0:
-        instances_entropy = math.log(len(maf_list))  # if no SNPs- each instance has the prob. = max. entropy ln(n)
+def entropy_features(maf_list):
+    # Calculates a normalized Shannon entropy (from Miller et al, 2015) of nonsyn SNPs distributed across instances
+    maf = np.array(maf_list)
+    if np.sum(maf) == 0:
+        # if no SNPs- each instance has the prob. = max. entropy ln(n)
+        e = np.log(len(maf))
     else:
-        instances_entropy = entropy(maf_list)
-        if (len(maf_list) == 0):
-            print
-            "maf_list empty"
-        if (np.isnan(instances_entropy)):
-            print
-            "entropy nan"
-            print
-            maf_list
+        # Filter out nans; scipy.stats.entropy automatically normalizes the input
+        # We divide the result by ln(|x|) to account for different sized inputs
+        e = entropy(maf[~np.isnan(maf)]) / np.log(len(maf))
 
-    features_dict[state_id].append(instances_entropy)
-    table_columns.append("snp_nonsyn_entropy")
+    return {'snp_nonsyn_entropy': e}
 
 
-def pseudo_dNdS_features(features_dict, state_id, table_columns, ref_seq, Nd, Sd):
+def pseudo_dNdS_features(ref_seq, Nd, Sd):
     N, S = seq_ns(ref_seq)  # Reference expected syn/nonsyn per site
     PN = 0 if N == 0 else Nd / float(N)  # Proportion of nonsyn
     PS = 0 if S == 0 else Sd / float(S)  # Proportion of syn
 
     # num of nonsyn substitutions per nonsyn site
     dN = -0.75 * (np.log(1 - 4 * PN / float(3)))
-    features_dict[state_id].append(dN)
-    table_columns.append("pseudo_nonsyn")
 
     # num of syn substitutions per syn site
     if 4 * PS / float(3) >= 1:
         dS = 1
     else:
         dS = -0.75 * (np.log(1 - 4 * PS / float(3)))
-    features_dict[state_id].append(dS)
-    table_columns.append("pseudo_syn")
 
     if dN == 0 or dS == 0:
         dN_dS = 1  # There isn't enough information to calculate dN/dS (1 is a neutral value)
     else:
         dN_dS = dN / dS
         if dN_dS == np.nan:
-            print("dN = " + str(dN))
-            print("dS = " + str(dS))
             dN_dS = 1  # There isn't enough information to calculate dN/dS (1 is a neutral value)
 
-    features_dict[state_id].append(dN_dS)
-    table_columns.append("pseudo_dNdS")
+    return {
+        'pseudo_nonsyn': dN,
+        'pseudo_syn': dS,
+        'pseudo_dNdS': dN_dS
+    }
 
 
-def pfam_emission_prob_features(features_dict, state_id, table_columns, domain_name, state):
-    # Feature: Max. emission probability
-    state_max_emiss_prob = max(hmm_prob_dict[domain_name][state])
-    features_dict[state_id].append(state_max_emiss_prob)
-    table_columns.append("pfam_prob_max")
-
-    # Features: emission prob. for each amino acid
-    for i in range(len(hmm_prob_dict[domain_name][state])):
-        features_dict[state_id].append(hmm_prob_dict[domain_name][state][i])
-        prob_aa_title = "pfam_prob_" + str(pfam_aa_order[i])
-        table_columns.append(prob_aa_title)
+def pfam_emission_prob_features(hmm_prob_dict, domain_name, state):
+    # Max. emission probability + emission prob. for each amino acid
+    probs = hmm_prob_dict[domain_name][state]
+    d = {f'pfam_prob_{pfam_aa_order[i]}': prob for i, prob in enumerate(probs)}
+    d.update({'pfam_prob_max': max(probs)})
+    return d
 
 
-def pfam_conserved_state_feature(features_dict, state_id, table_columns, state, con_states_dict):
-    # Feature: is state is conserved according to Pfam?
-    con_state = False
-    if (state in con_states_dict.keys()):
-        con_state = True
-
-    features_dict[state_id].append(con_state)
-    table_columns.append("is_pfam_conserved")
+def pfam_conserved_state_feature(state, con_states_dict):
+    # is state is conserved according to Pfam?
+    return {'is_pfam_conserved': state in con_states_dict}
 
 
-def instance_individuals_100way_change_features(features_dict, state_id, table_columns, maf_list,
-                                                aa_ref_hist, jsd100way_list):
+def instance_individuals_100way_change_features(maf_list, aa_ref_hist, jsd100way_list):
+
     # Computing Orthologus conservation in different ways (from 100way-ucsc alignment)
     # Computing Paralogus conservartion in different ways (from different instances)
     # Combining both to measurments that maximize ortho. con. and minimize para. con.
 
-    ##Paralogus##
-    # ===Feature: fraction of change across instances===#
+    ## Paralogus ##
+
+    # fraction of change across instances
 
     # determine majority aa (index of one of the majority)
     minor_counts = 0
@@ -505,199 +381,150 @@ def instance_individuals_100way_change_features(features_dict, state_id, table_c
         minor_counts += aa_ref_hist[i]
 
     instances_change_frac = minor_counts / float(np.sum(aa_ref_hist))
-    features_dict[state_id].append(instances_change_frac)
-    table_columns.append("instances_change_frac")
 
-    # ===Feature: entropy of ref AA===#
+    # Feature: entropy of ref AA
     aa_ref_entropy = SE_hist(aa_ref_hist)
-    features_dict[state_id].append(aa_ref_entropy)
-    table_columns.append("aa_ref_SE")
 
-    # ===Feature: JSD of ref AA===#
+    # JSD of ref AA
     aa_ref_jsd = JSD_hist(aa_ref_hist, background=JSD_background.BLOSUM62)
-    features_dict[state_id].append(aa_ref_jsd)
-    table_columns.append("aa_ref_jsd")
 
-    ##Orthologus##
+    ## Orthologus ##
 
     # first remove -1 illegal scores of JSD mismatch (positions where JSD alignment didn't match, I added -1):
     jsd100way_list_no_mismatch = [i for i in jsd100way_list if i != -1]
 
-    # ===Feature: median JSD score across 100way vertbrates===#
-    if (len(jsd100way_list_no_mismatch) == 0):
-        med_jsd = 0
-    else:
-        med_jsd = np.median(jsd100way_list_no_mismatch)
-    features_dict[state_id].append(med_jsd)
-    table_columns.append("med_jsd_100way_blosum")
+    # median JSD score across 100way vertbrates
+    med_jsd = 0 if len(jsd100way_list_no_mismatch) == 0 else np.median(jsd100way_list_no_mismatch)
 
-    # ===Feature: Histogram of JSD score across 100way vertebrates===#
+    # Histogram of JSD score across 100way vertebrates
     jsd_median_bins = [0, 0.5, 0.6, 0.7, 0.8, 1]
     jsd_median_hist = np.histogram(jsd100way_list_no_mismatch, bins=jsd_median_bins)[0]
 
-    features_dict[state_id].extend(jsd_median_hist)
-    for i in range(len(jsd_median_bins) - 1):
-        hist_col_title = "jsd_median_hist_" + str(jsd_median_bins[i]) + "-" + str(jsd_median_bins[i + 1])
-        table_columns.append(hist_col_title)
+    # Functional measurements of both
+    # ratio: change across instances / change across individuals(MAF)
 
-    ##Functional measurments of both##
-    # ===Feature: ratio: change across instances / change across individuals(MAF)===#
-    # idea: low MAF (orthologues), high instances change (paralogous) = SDPs
+    # low MAF (orthologues), high instances change (paralogous) = SDPs
     if np.sum(maf_list) == 0:
         avg_maf_overall = 0.0000001  # set the minimal non-zero in our data
     else:
         avg_maf_overall = np.sum(maf_list) / float(len(maf_list))
 
-    instances_individuals_ratio = instances_change_frac / float(avg_maf_overall)
-    features_dict[state_id].append(instances_individuals_ratio)
+    max_entropy = SE_hist([0] * len(AMINO_ACIDS))
 
-    table_columns.append("instances_individuals_change_ratio")
+    return dict(
+        [
+            ('instances_change_frac', instances_change_frac),
+            ('aa_ref_SE', aa_ref_entropy),
+            ('aa_ref_jsd', aa_ref_jsd),
+            ('med_jsd_100way_blosum', med_jsd)
+        ] +
+        [
+            (f'jsd_median_hist_{jsd_median_bins[i]}-{jsd_median_bins[i + 1]}', jsd_median_hist[i])
+            for i in range(len(jsd_median_bins) - 1)
+        ] +
+        [
+            ('instances_individuals_change_ratio', instances_change_frac / float(avg_maf_overall)),
 
-    # ===Feature: ratio: med JSD across 100way vertebrates / instances major allele freq.===#
-    # idea: high JSD (orthologues), high instances change (paralogous) = SDPs
-    instances_major_frac = 1 - instances_change_frac  # We want high MAF -> small 1-MAF
-    jsd_instances_major_ratio = med_jsd / float(instances_major_frac)  # We want high JSD
-    features_dict[state_id].append(jsd_instances_major_ratio)
-    table_columns.append("jsd_100way_instances_major_ratio")
+            # high JSD (orthologues), high instances change (paralogous) = SDPs
+            # we want high MAF -> small 1 - MAF, high JSD
+            ('jsd_100way_instances_major_ratio', med_jsd / float(1 - instances_change_frac)),
 
+            # high JSD (orthologues), high shannon entropy (paralogous) = SDPs
+            ('jsd_mul_aa_ref_SE', med_jsd * aa_ref_entropy),
 
-    # ===Feature: multiplication: med JSD * shannon entropy of ref aa===#
-    # idea: high JSD (orthologues), high shannon entropy (paralogous) = SDPs
-    jsd_mul_se = (med_jsd * aa_ref_entropy)
-    features_dict[state_id].append(jsd_mul_se)
-    table_columns.append("jsd_mul_aa_ref_SE")
+            # high JSD (orthologues), low diff. of max SE to shannon entropy (paralogous) = SDPs
+            ('jsd_SE_diff_ratio', med_jsd / float(max_entropy - aa_ref_entropy)),
 
-    # ===Feature: ratio: med JSD / (max. entropy - shannon entropy of ref aa)===#
-    # idea: high JSD (orthologues), low diff. of max SE to shannon entropy (paralogous) = SDPs
-    max_entropy = SE_hist([0] * len(amino_acids_sym))
-    entropy_diff = max_entropy - aa_ref_entropy
-    jsd_SE_diff_ratio = med_jsd / float(entropy_diff)
-    features_dict[state_id].append(jsd_SE_diff_ratio)
-    table_columns.append("jsd_SE_diff_ratio")
+            # high JSD (orthologues), high shannon entropy (paralogous) = SDPs
+            ('jsd_SE_sum', med_jsd + (aa_ref_entropy / float(max_entropy))),
 
-    # ===Feature: sum: med JSD + normalized shannon entropy of ref aa ===#
-    # idea: high JSD (orthologues), high shannon entropy (paralogous) = SDPs
-    norm_SE = aa_ref_entropy / float(max_entropy)
-    jsd_SE_sum = med_jsd + norm_SE
-    features_dict[state_id].append(jsd_SE_sum)
-    table_columns.append("jsd_SE_sum")
+            # high shannon entropy (paralogous), low diff. of max JSD to avg JSD (orthologues) = SDPs
+            ('SE_jsd_diff_ratio', aa_ref_entropy / float(1 - med_jsd)),
 
-    # ===Feature: ratio:shannon entropy of ref aa / (max. JSD - med JSD)===#
-    # idea: high shannon entropy (paralogous), low diff. of max JSD to avg JSD (orthologues) = SDPs
-    max_jsd = 1
-    jsd_diff = (max_jsd - med_jsd)
-    SE_jsd_diff_ratio = aa_ref_entropy / float(jsd_diff)
-    features_dict[state_id].append(SE_jsd_diff_ratio)
-    table_columns.append("SE_jsd_diff_ratio")
+            # high JSD (orthologues), low JSD (paralogoues) = SDPs
+            ('jsds_ratio', med_jsd / float(aa_ref_jsd)),
 
-    # ===Feature: ratio: med 100way-JSD / (aa ref JSD)===#
-    # idea: high JSD (orthologues), low JSD (paralogoues) = SDPs
-    jsds_ratio = med_jsd / float(aa_ref_jsd)
-    features_dict[state_id].append(jsds_ratio)
-    table_columns.append("jsds_ratio")
+            # high difference between orthoulogus (more conserved) and paralogous (less conserved)
+            ('jsds_subtraction', med_jsd - aa_ref_jsd)
+        ]
 
-    # ===Feature: subtraction: (avg 100way-JSD) - (aa ref JSD)===#
-    # idea: high difference between orthoulogus (more conserved) and paralogous (less conserved)
-    jsds_subtraction = med_jsd - aa_ref_jsd
-    features_dict[state_id].append(jsds_subtraction)
-    table_columns.append("jsds_subtraction")
+    )
 
 
-def aa_identity_features(features_dict, state_id, table_columns, aa_ref_hist, type_str):
-    # ===Features: aa identity histogram===#
-    for i in range(len(amino_acids_sym)):
-        features_dict[state_id].append(aa_ref_hist[i])
-        table_columns.append(type_str + "_hist_" + str(amino_acids_sym[i]))
-
-    # ===Features: aa identity prob. vector===#
+def aa_identity_features(aa_ref_hist, type_str):
+    # aa identity histogram and probability
     if np.sum(aa_ref_hist) == 0:
         aa_ref_prob = aa_ref_hist
     else:
         aa_ref_prob = np.asarray(aa_ref_hist) / float(np.sum(aa_ref_hist))
-    for i in range(len(amino_acids_sym)):
-        features_dict[state_id].append(aa_ref_prob[i])
-        table_columns.append(type_str + "_prob_" + str(amino_acids_sym[i]))
+
+    d = {f'{type_str}_hist_{aa}': aa_ref_hist_i for aa, aa_ref_hist_i in zip(AMINO_ACIDS, aa_ref_hist)}
+    d.update({f'{type_str}_prob_{aa}': aa_ref_prob_i for aa, aa_ref_prob_i in zip(AMINO_ACIDS, aa_ref_prob)})
+    return d
 
 
-def major_allele_charge(features_dict, state_id, table_columns, aa_ref_hist):
+def major_allele_charge(aa_ref_hist):
     # ===Feature: major allele aa charge counts===#
-    charge_positive_count = 0
-    charge_negative_count = 0
-    charge_neutral_count = 0
-    for i in range(len(amino_acids_sym)):
+    charge_positive_count = charge_negative_count = charge_neutral_count = 0
+    for i in range(len(AMINO_ACIDS)):
         aa_count = aa_ref_hist[i]
-        if (aa_count > 0):
-            charge = aa_charge_dict[amino_acids_sym[i]]
-            if (charge.value == 0):
+        if aa_count > 0:
+            charge = aa_charge_dict[AMINO_ACIDS[i]]
+            if charge.value == 0:
                 charge_neutral_count += aa_count
-            elif (charge.value == 1):
+            elif charge.value == 1:
                 charge_positive_count += aa_count
             else:
                 charge_negative_count += aa_count
 
-    features_dict[state_id].append(charge_positive_count)
-    table_columns.append("aa_ref_charge_positive_count")
-    features_dict[state_id].append(charge_negative_count)
-    table_columns.append("aa_ref_charge_negative_count")
-    features_dict[state_id].append(charge_neutral_count)
-    table_columns.append("aa_ref_charge_neutral_count")
-
     # ===Feature: major allele majority charge===#
     charge_majority = aa_charge.NEUTRAL.value
-    if (charge_positive_count > charge_neutral_count and charge_positive_count > charge_negative_count):
+    if charge_positive_count > charge_neutral_count and charge_positive_count > charge_negative_count:
         charge_majority = aa_charge.POSITIVE.value
-    elif (charge_negative_count > charge_neutral_count and charge_negative_count > charge_positive_count):
+    elif charge_negative_count > charge_neutral_count and charge_negative_count > charge_positive_count:
         charge_majority = aa_charge.NEGATIVE.value
 
-    features_dict[state_id].append(charge_majority)
-    table_columns.append("aa_ref_charge_majority")
+    return {
+        'aa_ref_charge_positive_count': charge_positive_count,
+        'aa_ref_charge_negative_count': charge_negative_count,
+        'aa_ref_charge_neutral_count': charge_neutral_count,
+        'aa_ref_charge_majority': charge_majority
+    }
 
 
-def major_allele_functional_group(features_dict, state_id, table_columns, aa_ref_hist):
-    # ===Feature: major allele aa functional group counts===#
+def major_allele_functional_group(aa_ref_hist):
+    # major allele aa functional group counts
     func_counters = [0] * (len(aa_functional_group) - 1)  # Major allele is never a stop codon
-    for i in range(len(amino_acids_sym)):
+    for i in range(len(AMINO_ACIDS)):
         aa_count = aa_ref_hist[i]
-        if (aa_count > 0):
+        if aa_count > 0:
             func_group_num = aa_functional_group_dict[
-                amino_acids_sym[i]].value  # getting numeric functional group value
-            if (func_group_num == aa_functional_group.STOP.value):  # Major allele is never a stop codon
+                AMINO_ACIDS[i]].value  # getting numeric functional group value
+            if func_group_num == aa_functional_group.STOP.value:  # Major allele is never a stop codon
                 continue
             func_counters[func_group_num] += aa_count
 
-    features_dict[state_id].extend(func_counters)
-    for group in aa_functional_group:
-        if group == aa_functional_group.STOP:  # Major allele is never a stop codon
-            continue
-        func_str = "aa_ref_" + str(group) + "_count"
-        table_columns.append(func_str)
+    return {
+        k: v for k, v in zip(
+            [f'aa_ref_{group}_count' for group in aa_functional_group if group != aa_functional_group.STOP],
+            func_counters
+        )
+    }
 
 
-def sub_diff_functional_group(features_dict, state_id, table_columns, ref_alt_pairs):
+def sub_diff_functional_group(ref_alt_pairs):
     # ===Features: count and frequency staying in functional group Vs. moving to other group===#
-    stay_cnt = 0
-    stay_cnt_freq = 0
-    move_cnt = 0
-    move_cnt_freq = 0
+    stay_cnt = stay_cnt_freq = move_cnt = move_cnt_freq = 0
 
     for (ref, alt, af) in ref_alt_pairs:
         ref_func_group = aa_functional_group_dict[ref].value
         alt_func_group = aa_functional_group_dict[alt].value
-        if (ref_func_group == alt_func_group):
+        if ref_func_group == alt_func_group:
             stay_cnt += 1
             stay_cnt_freq += af
         else:
             move_cnt += 1
             move_cnt_freq += af
-
-    features_dict[state_id].append(stay_cnt)
-    table_columns.append("sub_func_group_stay_cnt")
-    features_dict[state_id].append(stay_cnt_freq)
-    table_columns.append("sub_func_group_stay_freq")
-    features_dict[state_id].append(move_cnt)
-    table_columns.append("sub_func_group_move_cnt")
-    features_dict[state_id].append(move_cnt_freq)
-    table_columns.append("sub_func_group_move_freq")
 
     # ===Features: functional groups transitions counts===#
     transitions_vec_size = (len(aa_functional_group) - 1) * len(
@@ -712,50 +539,45 @@ def sub_diff_functional_group(features_dict, state_id, table_columns, ref_alt_pa
         trans_vec_i += alt_func_group
         transitions_vec[trans_vec_i] += 1
 
-    features_dict[state_id].extend(transitions_vec)
-    for i in range(len(aa_functional_group) - 1):  # -1 for excluding transitions from STOP
-        for j in range(len(aa_functional_group)):
-            trans_col_title = "sub_func_group_trans_" + str(i) + "-" + str(j)
-            table_columns.append(trans_col_title)
+    keys = [f'sub_func_group_trans_{i}-{j}' for i in range(len(aa_functional_group) - 1) for j in range(len(aa_functional_group))]
+
+    return dict([
+        ('sub_func_group_stay_cnt', stay_cnt),
+        ('sub_func_group_stay_freq', stay_cnt_freq),
+        ('sub_func_group_move_cnt', move_cnt),
+        ('sub_func_group_move_freq', move_cnt_freq)
+    ] + [(k, v) for k, v in zip(keys, transitions_vec)])
 
 
-def major_allele_hydrophobicity(features_dict, state_id, table_columns, aa_ref_hist):
-    # ===Feature: major allele hydrophicity average, hydrophobic and polar counts===#
-    h_sum = 0
-    h_cnt = 0
-    hydrophobic_cnt = 0
-    polar_charge_cnt = 0
-    for i in range(len(amino_acids_sym)):
+def major_allele_hydrophobicity(aa_ref_hist):
+    # major allele hydrophicity average, hydrophobic and polar counts
+    h_sum = h_cnt = hydrophobic_cnt = polar_charge_cnt = 0
+    for i in range(len(AMINO_ACIDS)):
         aa_count = aa_ref_hist[i]
-        if (aa_count > 0):
-            hindex = hindex_Kyte_Doolitle[amino_acids_sym[i]]
+        if aa_count > 0:
+            hindex = kd.get(AMINO_ACIDS[i], 0)
             h_sum += hindex * aa_count
             h_cnt += aa_count
 
-            if (hindex > 0):
+            if hindex > 0:
                 hydrophobic_cnt += aa_count
             else:
                 polar_charge_cnt += aa_count
 
     h_avg = 0 if h_cnt == 0 else h_sum / float(h_cnt)
 
-    features_dict[state_id].append(h_avg)
-    table_columns.append("hindex_avg")
-    features_dict[state_id].append(hydrophobic_cnt)
-    table_columns.append("hindex_pos_cnt")
-    features_dict[state_id].append(polar_charge_cnt)
-    table_columns.append("hindex_neg_cnt")
+    return {
+        'hindex_avg': h_avg,
+        'hindex_pos_cnt': hydrophobic_cnt,
+        'hindex_neg_cnt': polar_charge_cnt
+    }
 
 
-def sub_diff_hydrophobicity(features_dict, state_id, table_columns, ref_alt_pairs):
-    # ===Feature: hydrophicity difference average and weighted average===#
-    hindex_diff_sum = 0
-    hindex_diff_sum_weighted = 0
-    hindex_diff_cnt = 0
+def sub_diff_hydrophobicity(ref_alt_pairs):
+    # hydrophicity difference average and weighted average
+    hindex_diff_sum = hindex_diff_sum_weighted = hindex_diff_cnt = 0
     for (ref, alt, af) in ref_alt_pairs:
-        ref_hindex = hindex_Kyte_Doolitle[ref]
-        alt_hindex = hindex_Kyte_Doolitle[alt]
-        hindex_diff = (alt_hindex - ref_hindex)
+        hindex_diff = kd.get(alt, 0) - kd.get(ref, 0)
         hindex_diff_sum += hindex_diff
         hindex_diff_sum_weighted += hindex_diff * af
         hindex_diff_cnt += 1
@@ -766,27 +588,23 @@ def sub_diff_hydrophobicity(features_dict, state_id, table_columns, ref_alt_pair
         hindex_diff_avg = hindex_diff_sum / float(hindex_diff_cnt)
         hindex_diff_avg_weighted = hindex_diff_sum_weighted / float(hindex_diff_cnt)
 
-    features_dict[state_id].append(hindex_diff_avg)
-    table_columns.append("sub_diff_hindex_avg")
-    features_dict[state_id].append(hindex_diff_avg_weighted)
-    table_columns.append("sub_diff_hindex_avg_weighted")
+    return {
+        'sub_diff_hindex_avg': hindex_diff_avg,
+        'sub_diff_hindex_avg_weighted': hindex_diff_avg_weighted
+    }
 
 
-def major_allele_volume(features_dict, state_id, table_columns, aa_ref_hist):
-    # ===Feature: major allele volume average, tiny, small and big counts===#
-    vol_sum = 0
-    vol_cnt = 0
-    tiny_cnt = 0
-    small_cnt = 0
-    big_cnt = 0
-    for i in range(len(amino_acids_sym)):
+def major_allele_volume(aa_ref_hist):
+    # major allele volume average, tiny, small and big counts
+    vol_sum = vol_cnt = tiny_cnt = small_cnt = big_cnt = 0
+    for i in range(len(AMINO_ACIDS)):
         aa_count = aa_ref_hist[i]
-        if (aa_count > 0):
-            volume = aa_volume[amino_acids_sym[i]]
+        if aa_count > 0:
+            volume = aa_volume[AMINO_ACIDS[i]]
             vol_sum += volume * aa_count
             vol_cnt += aa_count
 
-            vol_group = aa_volume_group_dict[amino_acids_sym[i]]
+            vol_group = aa_volume_group_dict[AMINO_ACIDS[i]]
             if vol_group == aa_volume_group.TINY:
                 tiny_cnt += aa_count
             elif vol_group == aa_volume_group.SMALL:
@@ -794,22 +612,17 @@ def major_allele_volume(features_dict, state_id, table_columns, aa_ref_hist):
             elif vol_group == aa_volume_group.BIG:
                 big_cnt += aa_count
 
-    if vol_cnt == 0:
-        vol_avg = 0
-    else:
-        vol_avg = vol_sum / float(vol_cnt)
+    vol_avg = 0 if vol_cnt == 0 else vol_sum / float(vol_cnt)
 
-    features_dict[state_id].append(vol_avg)
-    table_columns.append("vol_avg")
-    features_dict[state_id].append(tiny_cnt)
-    table_columns.append("vol_tiny_cnt")
-    features_dict[state_id].append(small_cnt)
-    table_columns.append("vol_small_cnt")
-    features_dict[state_id].append(big_cnt)
-    table_columns.append("vol_big_cnt")
+    return {
+        'vol_avg': vol_avg,
+        'vol_tiny_cnt': tiny_cnt,
+        'vol_small_cnt': small_cnt,
+        'vol_big_cnt': big_cnt
+    }
 
 
-def sub_diff_volume(features_dict, state_id, table_columns, ref_alt_pairs):
+def sub_diff_volume(ref_alt_pairs):
     # ===Feature: volume difference average and weighted average===#
     volume_diff_sum = 0
     volume_diff_sum_weighted = 0
@@ -828,29 +641,29 @@ def sub_diff_volume(features_dict, state_id, table_columns, ref_alt_pairs):
         volume_diff_avg = volume_diff_sum / float(volume_diff_cnt)
         volume_diff_avg_weighted = volume_diff_sum_weighted / float(volume_diff_cnt)
 
-    features_dict[state_id].append(volume_diff_avg)
-    table_columns.append("sub_diff_vol_avg")
-    features_dict[state_id].append(volume_diff_avg_weighted)
-    table_columns.append("sub_diff_vol_avg_weighted")
+    return {
+        'sub_diff_vol_avg': volume_diff_avg,
+        'sub_diff_vol_avg_weighted': volume_diff_avg_weighted
+    }
 
 
-def major_allele_propensity(features_dict, state_id, table_columns, aa_ref_hist):
+def major_allele_propensity(aa_ref_hist):
     prop_sum = [0, 0, 0]
     prop_cnt = 0
     prop_majority_counts = [0, 0, 0]
-    for i in range(len(amino_acids_sym)):
+    for i in range(len(AMINO_ACIDS)):
         aa_count = aa_ref_hist[i]
         if aa_count > 0:
-            curr_prop = propensity_chou_fasman[amino_acids_sym[i]]
+            curr_prop = propensity_chou_fasman[AMINO_ACIDS[i]]
             mul_curr_prop = [x * aa_count for x in curr_prop]
             prop_sum = [sum(x) for x in zip(prop_sum, mul_curr_prop)]
             prop_cnt += aa_count
 
-            if (curr_prop[aa_propensity.ALPHA_HELIX.value] == max(curr_prop)):
+            if curr_prop[aa_propensity.ALPHA_HELIX.value] == max(curr_prop):
                 prop_majority_counts[aa_propensity.ALPHA_HELIX.value] += 1
-            if (curr_prop[aa_propensity.BETA_SHEET.value] == max(curr_prop)):
+            if curr_prop[aa_propensity.BETA_SHEET.value] == max(curr_prop):
                 prop_majority_counts[aa_propensity.BETA_SHEET.value] += 1
-            if (curr_prop[aa_propensity.TURN.value] == max(curr_prop)):
+            if curr_prop[aa_propensity.TURN.value] == max(curr_prop):
                 prop_majority_counts[aa_propensity.TURN.value] += 1
 
     # ===Feature: major allele propensity avgs===#
@@ -859,20 +672,23 @@ def major_allele_propensity(features_dict, state_id, table_columns, aa_ref_hist)
     else:
         prop_avg = [x / float(prop_cnt) for x in prop_sum]
 
-    features_dict[state_id].extend(prop_avg)
-    table_columns.extend(["aa_ref_alpha_prop_avg", "aa_ref_beta_prop_avg", "aa_ref_turn_prop_avg"])
-
     # ===Feature: major allele majority propensity===#
     max_idx = np.where(np.array(prop_majority_counts) == max(prop_majority_counts))[0]
     majority_vec = [0, 0, 0]
     for i in max_idx:
         majority_vec[i] = 1  # put 1 in the propensities that has max. count
 
-    features_dict[state_id].extend(majority_vec)
-    table_columns.extend(["aa_ref_alpha_is_majority", "aa_ref_beta_is_majority", "aa_ref_turn_is_majority"])
+    return {
+        'aa_ref_alpha_prop_avg': prop_avg[0],
+        'aa_ref_beta_prop_avg': prop_avg[1],
+        'aa_ref_turn_prop_avg': prop_avg[2],
+        'aa_ref_alpha_is_majority': majority_vec[0],
+        'aa_ref_beta_is_majority': majority_vec[1],
+        'aa_ref_turn_is_majority': majority_vec[2]
+    }
 
 
-def sub_diff_propensity(features_dict, state_id, table_columns, ref_alt_pairs):
+def sub_diff_propensity(ref_alt_pairs):
     # ===Feature: propensity difference average===#
     prop_vec_sum = [0, 0, 0]
     prop_vec_sum_weighted = [0, 0, 0]
@@ -887,32 +703,30 @@ def sub_diff_propensity(features_dict, state_id, table_columns, ref_alt_pairs):
 
         prop_cnt += 1
 
-    if (prop_cnt == 0):
+    if prop_cnt == 0:
         prop_vec_avg = prop_vec_avg_weighted = [0, 0, 0]
     else:
         prop_vec_avg = [(x / float(prop_cnt)) for x in prop_vec_sum]
         prop_vec_avg_weighted = [(x / float(prop_cnt)) for x in prop_vec_sum_weighted]
 
-    features_dict[state_id].extend(prop_vec_avg)
-    table_columns.append("sub_diff_prop_avg_alpha")
-    table_columns.append("sub_diff_prop_avg_beta")
-    table_columns.append("sub_diff_prop_avg_turn")
-    features_dict[state_id].extend(prop_vec_avg_weighted)
-    table_columns.append("sub_diff_prop_avg_alpha_weighed")
-    table_columns.append("sub_diff_prop_avg_beta_weighed")
-    table_columns.append("sub_diff_prop_avg_turn_weighed")
+    return {
+        'sub_diff_prop_avg_alpha': prop_vec_avg[0],
+        'sub_diff_prop_avg_beta': prop_vec_avg[1],
+        'sub_diff_prop_avg_turn': prop_vec_avg[2],
+        'sub_diff_prop_avg_alpha_weighed': prop_vec_avg_weighted[0],
+        'sub_diff_prop_avg_beta_weighed': prop_vec_avg_weighted[1],
+        'sub_diff_prop_avg_turn_weighed': prop_vec_avg_weighted[2]
+    }
 
 
-def major_allele_h_bonds(features_dict, state_id, table_columns, aa_ref_hist):
-    # ===Feature: avg donor and acceptor H-bond potential===#
-    donor_sum = 0
-    acceptor_sum = 0
-    bonds_cnt = 0
-    for i in range(len(amino_acids_sym)):
+def major_allele_h_bonds(aa_ref_hist):
+    # avg donor and acceptor H-bond potential
+    donor_sum = acceptor_sum = bonds_cnt = 0
+    for i in range(len(AMINO_ACIDS)):
         aa_count = aa_ref_hist[i]
-        if (aa_count > 0):
-            donor_sum += (aa_h_bond_donor[amino_acids_sym[i]] * aa_count)
-            acceptor_sum += (aa_h_bond_acceptor[amino_acids_sym[i]] * aa_count)
+        if aa_count > 0:
+            donor_sum += (aa_h_bond_donor[AMINO_ACIDS[i]] * aa_count)
+            acceptor_sum += (aa_h_bond_acceptor[AMINO_ACIDS[i]] * aa_count)
             bonds_cnt += aa_count
 
     if bonds_cnt == 0:
@@ -922,23 +736,17 @@ def major_allele_h_bonds(features_dict, state_id, table_columns, aa_ref_hist):
         donor_avg = donor_sum / float(bonds_cnt)
         acceptor_avg = acceptor_sum / float(bonds_cnt)
 
-    features_dict[state_id].append(donor_avg)
-    table_columns.append("H_bond_donor_avg")
-    features_dict[state_id].append(acceptor_avg)
-    table_columns.append("H_bond_acceptor_avg")
+    return {
+        'H_bond_donor_avg': donor_avg,
+        'H_bond_acceptor_avg': acceptor_avg
+    }
 
 
-def sub_diff_h_bonds(features_dict, state_id, table_columns, ref_alt_pairs):
-    # ===Feature: acceptor and donor diff average and weighted average===#
-    donor_diff_sum = 0
-    donor_diff_sum_weighted = 0
-    acceptor_diff_sum = 0
-    acceptor_diff_sum_weighted = 0
-    diff_cnt = 0
+def sub_diff_h_bonds(ref_alt_pairs):
+    # acceptor and donor diff average and weighted average
+    donor_diff_sum = donor_diff_sum_weighted = acceptor_diff_sum = acceptor_diff_sum_weighted = diff_cnt = 0
     for (ref, alt, af) in ref_alt_pairs:
-        ref_donor = aa_h_bond_donor[ref]
-        alt_donor = aa_h_bond_donor[alt]
-        donor_diff = (ref_donor - alt_donor)
+        donor_diff = aa_h_bond_donor[ref] - aa_h_bond_donor[alt]
         donor_diff_sum += donor_diff
         donor_diff_sum_weighted += donor_diff * af
 
@@ -959,200 +767,94 @@ def sub_diff_h_bonds(features_dict, state_id, table_columns, ref_alt_pairs):
         acceptor_diff_avg = acceptor_diff_sum / float(diff_cnt)
         acceptor_diff_avg_weighted = acceptor_diff_sum_weighted / float(diff_cnt)
 
-    features_dict[state_id].append(donor_diff_avg)
-    table_columns.append("donor_diff_avg")
-    features_dict[state_id].append(donor_diff_avg_weighted)
-    table_columns.append("donor_diff_avg_weighted")
-    features_dict[state_id].append(acceptor_diff_avg)
-    table_columns.append("acceptor_diff_avg")
-    features_dict[state_id].append(acceptor_diff_avg_weighted)
-    table_columns.append("acceptor_diff_avg_weighted")
+    return {
+        'donor_diff_avg': donor_diff_avg,
+        'donor_diff_avg_weighted': donor_diff_avg_weighted,
+        'acceptor_diff_avg': acceptor_diff_avg,
+        'acceptor_diff_avg_weighted': acceptor_diff_avg_weighted
+    }
 
 
-def spider_solvent_acc_pred(features_dict, state_id, table_columns, spider_dict):
-    # ===Feature: Accessible Surface Area (solvent accessibility) average===#
-    asa_avg = np.nanmean(spider_dict["spider2-ASA"])
-    features_dict[state_id].append(asa_avg)
-    table_columns.append("solvent_acc_avg")
-
-    # ===Feature: Accessible Surface Area (solvent accessibility) std===#
-    asa_std = np.nanstd(spider_dict["spider2-ASA"])
-    features_dict[state_id].append(asa_std)
-    table_columns.append("solvent_acc_std")
+def spider_solvent_acc_pred(spider_dict):
+    # Accessible Surface Area (solvent accessibility) mean/std
+    return {
+        'solvent_acc_avg': np.nanmean(spider_dict["spider2-ASA"]),
+        'solvent_acc_std': np.nanstd(spider_dict["spider2-ASA"])
+    }
 
 
-def spider_contact_number_pred(features_dict, state_id, table_columns, spider_dict):
-    # ===Feature: contanct number for Cα-Cα average===#
-    hsa2_cn_avg = np.nanmean(spider_dict["spider2-hsa2_CN"])
-    features_dict[state_id].append(hsa2_cn_avg)
-    table_columns.append("hsa2_cn_avg")
-
-    # ===Feature: contanct number for Cα-Cα std===#
-    hsa2_cn_std = np.nanstd(spider_dict["spider2-hsa2_CN"])
-    features_dict[state_id].append(hsa2_cn_std)
-    table_columns.append("hsa2_cn_std")
-
-    # ===Feature: contanct number for Cα-Cβ average===#
-    hsb2_cn_avg = np.nanmean(spider_dict["spider2-hsb2_CN"])
-    features_dict[state_id].append(hsb2_cn_avg)
-    table_columns.append("hsb2_cn_avg")
-
-    # ===Feature: contanct number for Cα-Cβ std===#
-    hsb2_cn_std = np.nanstd(spider_dict["spider2-hsb2_CN"])
-    features_dict[state_id].append(hsb2_cn_std)
-    table_columns.append("hsb2_cn_std")
+def spider_contact_number_pred(spider_dict):
+    return {
+        'hsa2_cn_avg': np.nanmean(spider_dict["spider2-hsa2_CN"]),  # contact number for Cα-Cα mean
+        'hsa2_cn_std': np.nanstd(spider_dict["spider2-hsa2_CN"]),   # contact number for Cα-Cα std
+        'hsb2_cn_avg': np.nanmean(spider_dict["spider2-hsb2_CN"]),  # contact number for Cα-Cβ mean
+        'hsb2_cn_std': np.nanstd(spider_dict["spider2-hsb2_CN"])    # contact number for Cα-Cβ std
+    }
 
 
-def spider_angles_pred(features_dict, state_id, table_columns, spider_dict):
-    # ===Feature: backbone Phi angle average===#
-    Phi_angle_avg = np.nanmean(spider_dict["spider2-angle_Phi"])
-    features_dict[state_id].append(Phi_angle_avg)
-    table_columns.append("backbone_Phi_angle_avg")
-
-    # ===Feature: backbone Phi angle std===#
-    Phi_angle_std = np.nanstd(spider_dict["spider2-angle_Phi"])
-    features_dict[state_id].append(Phi_angle_std)
-    table_columns.append("backbone_Phi_angle_std")
-
-    # ===Feature: backbone Psi angle average===#
-    Psi_angle_avg = np.nanmean(spider_dict["spider2-angle_Psi"])
-    features_dict[state_id].append(Psi_angle_avg)
-    table_columns.append("backbone_Psi_angle_avg")
-
-    # ===Feature: backbone Psi angle std===#
-    Psi_angle_std = np.nanstd(spider_dict["spider2-angle_Psi"])
-    features_dict[state_id].append(Psi_angle_std)
-    table_columns.append("backbone_Psi_angle_std")
-
-    # ===Feature: c-alpha angle (i-2=>i+1) average===#
-    tau_angle_avg = np.nanmean(spider_dict["spider2-angle_tau"])
-    features_dict[state_id].append(tau_angle_avg)
-    table_columns.append("c-alpha_tau_angle_avg")
-
-    # ===Feature: c-alpha angle (i-2=>i+1) std===#
-    tau_angle_std = np.nanstd(spider_dict["spider2-angle_tau"])
-    features_dict[state_id].append(tau_angle_std)
-    table_columns.append("c-alph_tau_angle_std")
-
-    # ===Feature: c-alpha angle (i-1=>i+1) average===#
-    theta_angle_avg = np.nanmean(spider_dict["spider2-angle_theta"])
-    features_dict[state_id].append(theta_angle_avg)
-    table_columns.append("c-alpha_theta_angle_avg")
-
-    # ===Feature: c-alpha angle (i-1=>i+1) std===#
-    theta_angle_std = np.nanstd(spider_dict["spider2-angle_theta"])
-    features_dict[state_id].append(theta_angle_std)
-    table_columns.append("c-alph_theta_angle_std")
+def spider_angles_pred(spider_dict):
+    return {
+        'backbone_Phi_angle_avg': np.nanmean(spider_dict["spider2-angle_Phi"]),     # backbone Phi angle mean
+        'backbone_Phi_angle_std': np.nanstd(spider_dict["spider2-angle_Phi"]),      # backbone Phi angle std
+        'backbone_Psi_angle_avg': np.nanmean(spider_dict["spider2-angle_Psi"]),     # backbone Psi angle mean
+        'backbone_Psi_angle_std': np.nanstd(spider_dict["spider2-angle_Psi"]),      # backbone Psi angle std
+        'c-alpha_tau_angle_avg': np.nanmean(spider_dict["spider2-angle_tau"]),      # c-alpha angle (i-2=>i+1) mean
+        'c-alph_tau_angle_std': np.nanstd(spider_dict["spider2-angle_tau"]),        # c-alpha angle (i-2=>i+1) std
+        'c-alpha_theta_angle_avg': np.nanmean(spider_dict["spider2-angle_theta"]),  # c-alpha angle (i-1=>i+1) mean
+        'c-alph_theta_angle_std': np.nanstd(spider_dict["spider2-angle_theta"])     # c-alpha angle (i-1=>i+1) std
+    }
 
 
-def spider_struct_pred(features_dict, state_id, table_columns, spider_dict):
-    # ===Feature: helix prob. avg===#
-    helix_prob_avg = np.nanmean(spider_dict["spider2-helix_prob"])
-    features_dict[state_id].append(helix_prob_avg)
-    table_columns.append("helix_prob_avg")
+def spider_struct_pred(spider_dict):
 
-    # ===Feature: helix prob. std===#
-    helix_prob_std = np.nanstd(spider_dict["spider2-helix_prob"])
-    features_dict[state_id].append(helix_prob_std)
-    table_columns.append("helix_prob_std")
+    # major allele majority propensity
+    values, counts = np.unique(np.array(spider_dict["spider2-2nd_struct"]), return_counts=True)
 
-    # ===Feature: sheet prob. avg===#
-    sheet_prob_avg = np.nanmean(spider_dict["spider2-sheet_prob"])
-    features_dict[state_id].append(sheet_prob_avg)
-    table_columns.append("sheet_prob_avg")
+    # Note: An earlier iteration of the code returned all 3 spd_*_is_majority keys as 1s
+    # in the absence of any spider 2nd struct infomation, while at the same time returning all the
+    # *_prob_avg/std keys as nans
+    # We follow the same logic here by setting the major allele (which would normally be one of H/E/C as HEC
+    # in case of missing information.
+    # Note also that we cannot use np.argmax since it only returns a 'single' index
+    maj_allele = 'HEC' if len(counts) == 0 else values[np.where(counts == np.max(counts))]
 
-    # ===Feature: sheet prob. std===#
-    sheet_prob_std = np.nanstd(spider_dict["spider2-sheet_prob"])
-    features_dict[state_id].append(sheet_prob_std)
-    table_columns.append("sheet_prob_std")
-
-    # ===Feature: turn prob. avg===#
-    turn_prob_avg = np.nanmean(spider_dict["spider2-turn_prob"])
-    features_dict[state_id].append(turn_prob_avg)
-    table_columns.append("turn_prob_avg")
-
-    # ===Feature: turn prob. std===#
-    turn_prob_std = np.nanstd(spider_dict["spider2-turn_prob"])
-    features_dict[state_id].append(turn_prob_std)
-    table_columns.append("turn_prob_std")
-
-    # ===Feature: major allele majority propensity===#
-    struct_majority_counts = []
-    struct_majority_counts.append(spider_dict["spider2-2nd_struct"].count('H'))
-    struct_majority_counts.append(spider_dict["spider2-2nd_struct"].count('E'))
-    struct_majority_counts.append(spider_dict["spider2-2nd_struct"].count('C'))
-
-    max_idx = np.where(np.array(struct_majority_counts) == max(struct_majority_counts))[0]
-    majority_vec = [0, 0, 0]
-    for i in max_idx:
-        majority_vec[i] = 1  # put 1 in the struct that has max. count
-
-    features_dict[state_id].extend(majority_vec)
-    table_columns.extend(["spd_helix_is_majority", "spd_sheet_is_majority", "spd_turn_is_majority"])
+    return {
+        'helix_prob_avg': np.nanmean(spider_dict["spider2-helix_prob"]),  # helix prob. mean
+        'helix_prob_std': np.nanstd(spider_dict["spider2-helix_prob"]),   # helix prob. std
+        'sheet_prob_avg': np.nanmean(spider_dict["spider2-sheet_prob"]),  # sheet prob. mean
+        'sheet_prob_std': np.nanstd(spider_dict["spider2-sheet_prob"]),   # sheet prob. std
+        'turn_prob_avg': np.nanmean(spider_dict["spider2-turn_prob"]),    # turn prob. mean
+        'turn_prob_std': np.nanstd(spider_dict["spider2-turn_prob"]),     # turn prob. std
+        'spd_helix_is_majority': int('H' in maj_allele),                  # 0/1
+        'spd_sheet_is_majority': int('E' in maj_allele),                  # 0/1
+        'spd_turn_is_majority': int('C' in maj_allele)                    # 0/1
+    }
 
 
-def spider_half_sphere_exposure_pred(features_dict, state_id, table_columns, spider_dict):
-    # ===Feature: half-sphere exposure Cα-Cα vectors (HSEα-up) average===#
-    hsa2_HSEu_avg = np.mean(spider_dict["spider2-hsa2_HSEu"])
-    features_dict[state_id].append(hsa2_HSEu_avg)
-    table_columns.append("hsa2_HSE-up_avg")
-
-    # ===Feature:half-sphere exposure Cα-Cα vectors (HSEα-up) std===#
-    hsa2_HSEu_std = np.std(spider_dict["spider2-hsa2_HSEu"])
-    features_dict[state_id].append(hsa2_HSEu_std)
-    table_columns.append("hsa2_HSE-up_std")
-
-    # ===Feature: half-sphere exposure Cα-Cα vectors (HSEα-down) average===#
-    hsa2_HSEd_avg = np.mean(spider_dict["spider2-hsa2_HSEu"])
-    features_dict[state_id].append(hsa2_HSEd_avg)
-    table_columns.append("hsa2_HSE-down_avg")
-
-    # ===Feature:half-sphere exposure Cα-Cα vectors (HSEα-down) std===#
-    hsa2_HSEd_std = np.std(spider_dict["spider2-hsa2_HSEd"])
-    features_dict[state_id].append(hsa2_HSEd_std)
-    table_columns.append("hsa2_HSE-down_std")
-
-    # ===Feature: half-sphere exposure Cα-Cβ vectors (HSEβ-up) average===#
-    hsb2_HSEu_avg = np.mean(spider_dict["spider2-hsb2_HSEu"])
-    features_dict[state_id].append(hsb2_HSEu_avg)
-    table_columns.append("hsb2_HSE-up_avg")
-
-    # ===Feature:half-sphere exposure Cα-Cα vectors (HSEβ-up) std===#
-    hsb2_HSEu_std = np.std(spider_dict["spider2-hsb2_HSEu"])
-    features_dict[state_id].append(hsb2_HSEu_std)
-    table_columns.append("hsb2_HSE-up_std")
-
-    # ===Feature: half-sphere exposure Cα-Cβ vectors (HSEβ-down) average===#
-    hsb2_HSEd_avg = np.mean(spider_dict["spider2-hsb2_HSEd"])
-    features_dict[state_id].append(hsb2_HSEd_avg)
-    table_columns.append("hsb2_HSE-down_avg")
-
-    # ===Feature:half-sphere exposure Cα-Cα vectors (HSEβ-down) std===#
-    hsb2_HSEd_std = np.std(spider_dict["spider2-hsb2_HSEd"])
-    features_dict[state_id].append(hsb2_HSEd_std)
-    table_columns.append("hsb2_HSE-down_std")
+def spider_half_sphere_exposure_pred(spider_dict):
+    return {
+        'hsa2_HSE-up_avg': np.mean(spider_dict["spider2-hsa2_HSEu"]),
+        'hsa2_HSE-up_std': np.std(spider_dict["spider2-hsa2_HSEu"]),
+        'hsa2_HSE-down_avg': np.mean(spider_dict["spider2-hsa2_HSEu"]),  # TODO: should be HSEd, bug?
+        'hsa2_HSE-down_std': np.std(spider_dict["spider2-hsa2_HSEd"]),
+        'hsb2_HSE-up_avg': np.mean(spider_dict["spider2-hsb2_HSEu"]),
+        'hsb2_HSE-up_std': np.std(spider_dict["spider2-hsb2_HSEu"]),
+        'hsb2_HSE-down_avg': np.mean(spider_dict["spider2-hsb2_HSEd"]),
+        'hsb2_HSE-down_std': np.std(spider_dict["spider2-hsb2_HSEd"])
+    }
 
 
-def whole_domain_conservation(features_dict, state_id, table_columns, states_dict):
-    # ===Features: phastCons and PhyloP whole-domain average and std===#
-    features_dict[state_id].append(states_dict["_phastCons_mean"])
-    table_columns.append("whole_domain_phastCons_avg")
-    features_dict[state_id].append(states_dict["_phastCons_std"])
-    table_columns.append("whole_domain_phastCons_std")
-    features_dict[state_id].append(states_dict["_phyloP_mean"])
-    table_columns.append("whole_domain_phyloP_avg")
-    features_dict[state_id].append(states_dict["_phyloP_std"])
-    table_columns.append("whole_domain_phyloP_std")
+def whole_domain_conservation(states_dict):
+    # phastCons and PhyloP whole-domain mean/std
+    return {
+        'whole_domain_phastCons_avg': states_dict["_phastCons_mean"],
+        'whole_domain_phastCons_std': states_dict["_phastCons_std"],
+        'whole_domain_phyloP_avg': states_dict["_phyloP_mean"],
+        'whole_domain_phyloP_std': states_dict["_phyloP_std"]
+    }
 
 
-def domain_location_features(features_dict, state_id, table_columns, state, max_state):
-    # ===Feature: the position in the domain===#
-    features_dict[state_id].append(state)
-    table_columns.append("domain_pos")
-
-    # ===Feature: the domain total length===#
-    features_dict[state_id].append(max_state)
-    table_columns.append("domain_length")
+def domain_location_features(state, max_state):
 
     # ===Feature: the location in the domain: beginning/middle/end===#
     location_list = [0, 0, 0]
@@ -1167,17 +869,17 @@ def domain_location_features(features_dict, state_id, table_columns, state, max_
     else:
         location_list[MIDDLE_POS] = 1
 
-    features_dict[state_id].extend(location_list)
-    table_columns.extend(["domain_pos_location_begin", "domain_pos_location_middle", "domain_pos_location_end"])
+    return {
+        'domain_pos': state,
+        'domain_length': max_state,
+        'domain_pos_location_begin': location_list[0],
+        'domain_pos_location_middle': location_list[1],
+        'domain_pos_location_end': location_list[2]
+    }
 
 
-def protein_location_features(features_dict, state_id, table_columns, protein_pos_list, protein_len_list):
-    # ===Feature: the protein total length (average)===#
-    protein_len_avg = np.mean(protein_len_list)
-    features_dict[state_id].append(protein_len_avg)
-    table_columns.append("prot_avg_length")
-
-    # ===Feature: counts of he location in the protein: beginning/middle/end===#
+def protein_location_features(protein_pos_list, protein_len_list):
+    # Avg. protein total length, counts of the location in the protein: beginning/middle/end
     location_list = [0, 0, 0]
     BEGIN_POS = 0
     MIDDLE_POS = 1
@@ -1194,28 +896,20 @@ def protein_location_features(features_dict, state_id, table_columns, protein_po
     # Normalize to ratios
     location_list_norm = np.array(location_list) / sum(location_list)
 
-    features_dict[state_id].extend(location_list_norm)
-    table_columns.extend(["prot_pos_location_begin", "prot_pos_location_middle", "prot_pos_location_end"])
+    return {
+        'prot_avg_length': np.mean(protein_len_list),
+        'prot_pos_location_begin': location_list_norm[0],
+        'prot_pos_location_middle': location_list_norm[1],
+        'prot_pos_location_end': location_list_norm[2]
+    }
 
 
 if __name__ == '__main__':
 
-    table_columns = []
     HMM_STATES_FOLDER = '/media/vineetb/t5-vineetb/dsprint/out/pfam/33/hmm_states_5'
     domain = 'ig'
 
-    SIFT_THRESHOLD = 0.05
-
-    # Rare SNP thresholds
-    MAFT_5 = 0.005
-    MAFT_05 = 0.0005
-    MAFT_005 = 0.00005
-
-    pfam_aa_order = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
-    amino_acids_sym = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y',
-                       "*"]
-    ligands = ["dna", "dnabase", "dnabackbone", "rna", "rnabase", "rnabackbone", "peptide", "ion", "metabolite", "sm",
-               "druglike", "all"]
+    ligands = ["dna", "dnabase", "dnabackbone", "rna", "rnabase", "rnabackbone", "peptide", "ion", "metabolite", "sm", "druglike", "all"]
 
     with open("../substitution_matrices/BLOSUM62_dict.pik", 'rb') as f:
         blosum62_dict = pickle.load(f)
@@ -1227,6 +921,7 @@ if __name__ == '__main__':
         hmm_prob_dict = pickle.load(f)
 
     features_dict = defaultdict(list)
+    features_lod = []
     an_str = POPULATIONS_ANS
     ac_str = POPULATIONS_ACS
     domains = [domain]
@@ -1270,6 +965,9 @@ if __name__ == '__main__':
 
         # Adding states features
         for state in states_dict:
+
+            features_dict = {}
+
             if str(state).startswith('_'): continue
             state_id = domain_name + "_" + str(state)
 
@@ -1322,12 +1020,12 @@ if __name__ == '__main__':
             clinsig_af = []
 
             # Major allele params
-            aa_ref_hist = [0] * len(amino_acids_sym)
+            aa_ref_hist = [0] * len(AMINO_ACIDS)
 
             # Substitution params
-            aa_alt_hist = [0] * len(amino_acids_sym)
-            aa_alt_prob = [0] * len(amino_acids_sym)
-            aa_alt_prob_avg = [0] * len(amino_acids_sym)
+            aa_alt_hist = [0] * len(AMINO_ACIDS)
+            aa_alt_prob = [0] * len(AMINO_ACIDS)
+            aa_alt_prob_avg = [0] * len(AMINO_ACIDS)
             ref_alt_pairs = []
 
             # protein position params
@@ -1366,7 +1064,7 @@ if __name__ == '__main__':
 
                 # Major allele parameters
                 aa_ref = d["aa_ref"]
-                aa_ref_pos = amino_acids_sym.index(aa_ref)
+                aa_ref_pos = AMINO_ACIDS.index(aa_ref)
                 aa_ref_hist[aa_ref_pos] += 1
 
                 # Conservation scores
@@ -1436,10 +1134,10 @@ if __name__ == '__main__':
                                 rare_005_num += 1
                                 rare_05_num += 1
                                 rare_5_num += 1
-                            elif (bp_af_adj_dict[alt_codon] < MAFT_05):
+                            elif bp_af_adj_dict[alt_codon] < MAFT_05:
                                 rare_05_num += 1
                                 rare_5_num += 1
-                            elif (bp_af_adj_dict[alt_codon] < MAFT_5):
+                            elif bp_af_adj_dict[alt_codon] < MAFT_5:
                                 rare_5_num += 1
 
                     # Alt, BLOSUM62 and PAM40 features
@@ -1455,7 +1153,7 @@ if __name__ == '__main__':
                         pam40_list.append(pam_val)
                         weigted_pam40_list.append(pam_val * af_adj)
                         # Alt aa counts
-                        aa_alt_pos = amino_acids_sym.index(alt)
+                        aa_alt_pos = AMINO_ACIDS.index(alt)
                         aa_alt_hist[aa_alt_pos] += 1
                         # Alt aa prob.
                         aa_alt_prob[aa_alt_pos] += af_adj
@@ -1543,99 +1241,75 @@ if __name__ == '__main__':
                                         pop_maf_nonsyn_list[i].append(pop_maf)
                                     pop_maf_list[i].append(pop_maf)
 
-            # ===domain_regular_features===#
-            features_dict[state_id].append(domain_name)
-            table_columns.append("domain_name")
+            features_dict['state_id'] = state_id
+            features_dict['domain_name'] = domain_name
 
             domain_idx = (domains.index(domain_name))
-            features_dict[state_id].append(random_ids[domain_idx])
-            table_columns.append("domain_id")
+            features_dict['domain_id'] = random_ids[domain_idx]
 
-            # ===ExAC MAF Features===#
-            ExAC_MAF_features(features_dict, state_id, table_columns, sites_aa_num, sites_aa_alter_num, maf_list)
-            ExAC_population_features(features_dict, state_id, table_columns, ac_sum, ac_sum_syn, ac_sum_nonsyn,
-                                     an_list, pop_maf_list, pop_maf_syn_list, pop_maf_nonsyn_list)
-            ExAC_count_features(features_dict, state_id, table_columns, sites_aa_num, sites_aa_alter_num,
-                                sites_snp_num, sites_snp_alter_num)
-            ExAC_rareSNP_features(features_dict, state_id, table_columns, sites_snp_alter_num, rare_5_num,
-                                  rare_05_num, rare_005_num)
-
-            # ===Conservation scores features===#
-            conservation_features(features_dict, state_id, table_columns, phastCons_dict, phyloP_dict)
-
-            # ===Substitution matrix Features===#
-            sub_matrix_features(features_dict, state_id, table_columns, blosum62_list, weigted_blosum62_list, "blosum")
-            sub_matrix_features(features_dict, state_id, table_columns, pam40_list, weigted_pam40_list, "pam")
-
-            # ===pseudo-sequence dN/dS feature===#
-            pseudo_dNdS_features(features_dict, state_id, table_columns, ref_seq, Nd, Sd)
-
-            # ===Pfam HMM-emission probabilities features===#
-            pfam_emission_prob_features(features_dict, state_id, table_columns, domain_name, state)
-
-            pfam_conserved_state_feature(features_dict, state_id, table_columns, state, con_states_dict)
-
-            # ===SIFT score features===#
-            SIFT_features(features_dict, state_id, table_columns, sift_scores_list, weighted_sift_scores_list)
-
-            # ===Polyphen score features===#
-            PolyPhen_features(features_dict, state_id, table_columns, polyphen_scores_list, polyphen_pred_list,
-                              weighted_polyphen_scores_list)
-
-            # ===ClinVar score features===#
-            ClinVar_scores(features_dict, state_id, table_columns, clinsig_list, clinsig_af)
-
-            # ===Entropy features===#
-            entropy_features(features_dict, state_id, table_columns, maf_list)
-
-            # ===instances-change to individuals-change ratios & instance-change to 100way vertbrate ratio===#
-            instance_individuals_100way_change_features(features_dict, state_id, table_columns, maf_list,
-                                                        aa_ref_hist, jsd100way_list)
-
-            # ===Major allele aa chemical features===#
-            aa_identity_features(features_dict, state_id, table_columns, aa_ref_hist, "aa_ref")
-
-            major_allele_charge(features_dict, state_id, table_columns, aa_ref_hist)
-            major_allele_hydrophobicity(features_dict, state_id, table_columns, aa_ref_hist)
-            major_allele_volume(features_dict, state_id, table_columns, aa_ref_hist)
-            major_allele_functional_group(features_dict, state_id, table_columns, aa_ref_hist)
-            major_allele_propensity(features_dict, state_id, table_columns, aa_ref_hist)
-            major_allele_h_bonds(features_dict, state_id, table_columns, aa_ref_hist)
-
-            # ===Substitution features===#
-            aa_identity_features(features_dict, state_id, table_columns, aa_alt_hist, "aa_alt_cnt")
-
-            for i in range(len(amino_acids_sym)):
+            for i in range(len(AMINO_ACIDS)):
                 if aa_alt_prob[i] > 0:
                     aa_alt_prob_avg[i] = aa_alt_prob[i] / float(aa_alt_hist[i])
-            aa_identity_features(features_dict, state_id, table_columns, aa_alt_prob_avg, "aa_alt_avg_freq")
 
-            # ===Substitution chemical features===#
-            sub_diff_hydrophobicity(features_dict, state_id, table_columns, ref_alt_pairs)
-            sub_diff_volume(features_dict, state_id, table_columns, ref_alt_pairs)
-            sub_diff_functional_group(features_dict, state_id, table_columns, ref_alt_pairs)
-            sub_diff_propensity(features_dict, state_id, table_columns, ref_alt_pairs)
-            sub_diff_h_bonds(features_dict, state_id, table_columns, ref_alt_pairs)
+            features = [
+                ExAC_MAF_features(sites_aa_num, sites_aa_alter_num, maf_list),
+                ExAC_population_features(pop_maf_list, pop_maf_syn_list, pop_maf_nonsyn_list),
+                ExAC_count_features(sites_aa_num, sites_aa_alter_num, sites_snp_num, sites_snp_alter_num),
+                ExAC_rareSNP_features(sites_snp_alter_num, rare_5_num, rare_05_num, rare_005_num),
 
-            # ===SPIDER - secondary structure and solvent accessibility predictions baxsed on the protein sequence===#
-            spider_solvent_acc_pred(features_dict, state_id, table_columns, spider_dict)
-            spider_contact_number_pred(features_dict, state_id, table_columns, spider_dict)
-            spider_angles_pred(features_dict, state_id, table_columns, spider_dict)
-            spider_struct_pred(features_dict, state_id, table_columns, spider_dict)
-            spider_half_sphere_exposure_pred(features_dict, state_id, table_columns, spider_dict)
+                conservation_features(phastCons_dict, phyloP_dict),
 
-            # ===Whole-domain aggregated features===#
-            whole_domain_conservation(features_dict, state_id, table_columns, states_dict)
+                sub_matrix_features(blosum62_list, weigted_blosum62_list, 'blosum'),
+                sub_matrix_features(pam40_list, weigted_pam40_list, 'pam'),
 
-            # ===Position and location features===#
+                pseudo_dNdS_features(ref_seq, Nd, Sd),
+                pfam_emission_prob_features(hmm_prob_dict, domain_name, state),
+                pfam_conserved_state_feature(state, con_states_dict),
 
-            domain_location_features(features_dict, state_id, table_columns, state, max([k for k in states_dict if isinstance(k, int)]))
-            protein_location_features(features_dict, state_id, table_columns, protein_pos_list, protein_len_list)
+                SIFT_features(sift_scores_list, weighted_sift_scores_list),
+                PolyPhen_features(polyphen_scores_list, polyphen_pred_list, weighted_polyphen_scores_list),
+                ClinVar_scores(clinsig_list, clinsig_af),
 
-    # Exporting to data-frames table
-    domains_features_df = pd.DataFrame.from_dict(features_dict, orient='index')
-    domains_features_df.columns = table_columns[:domains_features_df.shape[1]]
+                entropy_features(maf_list),
+                instance_individuals_100way_change_features(maf_list, aa_ref_hist, jsd100way_list),
+
+                aa_identity_features(aa_ref_hist, "aa_ref"),
+                major_allele_charge(aa_ref_hist),
+                major_allele_hydrophobicity(aa_ref_hist),
+                major_allele_volume(aa_ref_hist),
+                major_allele_functional_group(aa_ref_hist),
+                major_allele_propensity(aa_ref_hist),
+                major_allele_h_bonds(aa_ref_hist),
+
+                aa_identity_features(aa_alt_hist, "aa_alt_cnt"),
+                aa_identity_features(aa_alt_prob_avg, "aa_alt_avg_freq"),
+
+                sub_diff_hydrophobicity(ref_alt_pairs),
+                sub_diff_volume(ref_alt_pairs),
+                sub_diff_functional_group(ref_alt_pairs),
+                sub_diff_propensity(ref_alt_pairs),
+                sub_diff_h_bonds(ref_alt_pairs),
+
+                spider_solvent_acc_pred(spider_dict),
+                spider_contact_number_pred(spider_dict),
+                spider_angles_pred(spider_dict),
+                spider_struct_pred(spider_dict),
+                spider_half_sphere_exposure_pred(spider_dict),
+
+                whole_domain_conservation(states_dict),
+                domain_location_features(state, max([k for k in states_dict if isinstance(k, int)])),
+                protein_location_features(protein_pos_list, protein_len_list)
+
+            ]
+
+            for i, feature in enumerate(features):
+                features_dict.update(feature)
+            features_lod.append(features_dict)
+
+    # TODO: We shouldn't have to specify columns; remove after validation against data generated with columns specified
+    columns = ['domain_name', 'domain_id', 'avg_maf_all', 'avg_maf_altered', 'maf_hist_0-0.001', 'maf_hist_0.001-0.005', 'maf_hist_0.005-0.01', 'maf_hist_0.01-0.02', 'maf_hist_0.02-0.04', 'maf_hist_0.04-0.06', 'maf_hist_0.06-0.08', 'maf_hist_0.08-0.1', 'maf_hist_0.1-0.2', 'maf_hist_0.2-0.5', 'maf_AFR', 'maf_AMR', 'maf_EAS', 'maf_FIN', 'maf_NFE', 'maf_OTH', 'maf_SAS', 'maf_syn_AFR', 'maf_syn_AMR', 'maf_syn_EAS', 'maf_syn_FIN', 'maf_syn_NFE', 'maf_syn_OTH', 'maf_syn_SAS', 'maf_nonsyn_AFR', 'maf_nonsyn_AMR', 'maf_nonsyn_EAS', 'maf_nonsyn_FIN', 'maf_nonsyn_NFE', 'maf_nonsyn_OTH', 'maf_nonsyn_SAS', 'alter_num_aa', 'alter_num_aa_norm', 'alter_num_snp', 'alter_num_snp_norm', 'avg_aa_polymorphisms', 'frac_poly_aa', 'rare_poly_0.5', 'rare_poly_0.05', 'rare_poly_0.005', 'phastCons1_avg', 'phastCons2_avg', 'phastCons3_avg', 'phyloP1_avg', 'phyloP2_avg', 'phyloP3_avg', 'phastCons1_hist_0.0-0.25', 'phastCons1_hist_0.25-0.5', 'phastCons1_hist_0.5-0.75', 'phastCons1_hist_0.75-0.8', 'phastCons1_hist_0.8-0.8500000000000001', 'phastCons1_hist_0.8500000000000001-0.9', 'phastCons1_hist_0.9-0.95', 'phastCons1_hist_0.95-1.0', 'phastCons2_hist_0.0-0.25', 'phastCons2_hist_0.25-0.5', 'phastCons2_hist_0.5-0.75', 'phastCons2_hist_0.75-0.8', 'phastCons2_hist_0.8-0.8500000000000001', 'phastCons2_hist_0.8500000000000001-0.9', 'phastCons2_hist_0.9-0.95', 'phastCons2_hist_0.95-1.0', 'phastCons3_hist_0.0-0.25', 'phastCons3_hist_0.25-0.5', 'phastCons3_hist_0.5-0.75', 'phastCons3_hist_0.75-0.8', 'phastCons3_hist_0.8-0.8500000000000001', 'phastCons3_hist_0.8500000000000001-0.9', 'phastCons3_hist_0.9-0.95', 'phastCons3_hist_0.95-1.0', 'phyloP1_hist_-14.0--1.0', 'phyloP1_hist_-1.0-0.0', 'phyloP1_hist_0.0-1.0', 'phyloP1_hist_1.0-2.0', 'phyloP1_hist_2.0-3.0', 'phyloP1_hist_3.0-3.5', 'phyloP1_hist_3.5-4.0', 'phyloP1_hist_4.0-4.5', 'phyloP1_hist_4.5-5.0', 'phyloP1_hist_5.0-5.5', 'phyloP1_hist_5.5-6.0', 'phyloP2_hist_-14.0--1.0', 'phyloP2_hist_-1.0-0.0', 'phyloP2_hist_0.0-1.0', 'phyloP2_hist_1.0-2.0', 'phyloP2_hist_2.0-3.0', 'phyloP2_hist_3.0-3.5', 'phyloP2_hist_3.5-4.0', 'phyloP2_hist_4.0-4.5', 'phyloP2_hist_4.5-5.0', 'phyloP2_hist_5.0-5.5', 'phyloP2_hist_5.5-6.0', 'phyloP3_hist_-14.0--1.0', 'phyloP3_hist_-1.0-0.0', 'phyloP3_hist_0.0-1.0', 'phyloP3_hist_1.0-2.0', 'phyloP3_hist_2.0-3.0', 'phyloP3_hist_3.0-3.5', 'phyloP3_hist_3.5-4.0', 'phyloP3_hist_4.0-4.5', 'phyloP3_hist_4.5-5.0', 'phyloP3_hist_5.0-5.5', 'phyloP3_hist_5.5-6.0', 'phastCons_codons_hist_0.0-0.25', 'phastCons_codons_hist_0.25-0.5', 'phastCons_codons_hist_0.5-0.75', 'phastCons_codons_hist_0.75-0.8', 'phastCons_codons_hist_0.8-0.8500000000000001', 'phastCons_codons_hist_0.8500000000000001-0.9', 'phastCons_codons_hist_0.9-0.95', 'phastCons_codons_hist_0.95-1.0', 'phyloP_codons_hist_-14.0--1.0', 'phyloP_codons_hist_-1.0-0.0', 'phyloP_codons_hist_0.0-1.0', 'phyloP_codons_hist_1.0-2.0', 'phyloP_codons_hist_2.0-3.0', 'phyloP_codons_hist_3.0-3.5', 'phyloP_codons_hist_3.5-4.0', 'phyloP_codons_hist_4.0-4.5', 'phyloP_codons_hist_4.5-5.0', 'phyloP_codons_hist_5.0-5.5', 'phyloP_codons_hist_5.5-6.0', 'blosum_avg', 'blosum_avg_weighted', 'blosum_positive_num', 'blosum_negative_num', 'blosum_ratio', 'pam_avg', 'pam_avg_weighted', 'pam_positive_num', 'pam_negative_num', 'pam_ratio', 'pseudo_nonsyn', 'pseudo_syn', 'pseudo_dNdS', 'pfam_prob_max', 'pfam_prob_A', 'pfam_prob_C', 'pfam_prob_D', 'pfam_prob_E', 'pfam_prob_F', 'pfam_prob_G', 'pfam_prob_H', 'pfam_prob_I', 'pfam_prob_K', 'pfam_prob_L', 'pfam_prob_M', 'pfam_prob_N', 'pfam_prob_P', 'pfam_prob_Q', 'pfam_prob_R', 'pfam_prob_S', 'pfam_prob_T', 'pfam_prob_V', 'pfam_prob_W', 'pfam_prob_Y', 'is_pfam_conserved', 'sift_avg', 'sift_avg_weighted', 'sift_deleterious_num', 'sift_tolerated_num', 'sift_ratio', 'sift_majority', 'polyphen_avg', 'polyphen_avg_weighted', 'polyphen_benign_num', 'polyphen_possibly_num', 'polyphen_probably_num', 'polyphen_majority', 'avg_clinvar_score', 'avg_clinvar_weighted', 'snp_nonsyn_entropy', 'instances_change_frac', 'aa_ref_SE', 'aa_ref_jsd', 'med_jsd_100way_blosum', 'jsd_median_hist_0-0.5', 'jsd_median_hist_0.5-0.6', 'jsd_median_hist_0.6-0.7', 'jsd_median_hist_0.7-0.8', 'jsd_median_hist_0.8-1', 'instances_individuals_change_ratio', 'jsd_100way_instances_major_ratio', 'jsd_mul_aa_ref_SE', 'jsd_SE_diff_ratio', 'jsd_SE_sum', 'SE_jsd_diff_ratio', 'jsds_ratio', 'jsds_subtraction', 'aa_ref_hist_A', 'aa_ref_hist_C', 'aa_ref_hist_D', 'aa_ref_hist_E', 'aa_ref_hist_F', 'aa_ref_hist_G', 'aa_ref_hist_H', 'aa_ref_hist_I', 'aa_ref_hist_K', 'aa_ref_hist_L', 'aa_ref_hist_M', 'aa_ref_hist_N', 'aa_ref_hist_P', 'aa_ref_hist_Q', 'aa_ref_hist_R', 'aa_ref_hist_S', 'aa_ref_hist_T', 'aa_ref_hist_V', 'aa_ref_hist_W', 'aa_ref_hist_Y', 'aa_ref_hist_*', 'aa_ref_prob_A', 'aa_ref_prob_C', 'aa_ref_prob_D', 'aa_ref_prob_E', 'aa_ref_prob_F', 'aa_ref_prob_G', 'aa_ref_prob_H', 'aa_ref_prob_I', 'aa_ref_prob_K', 'aa_ref_prob_L', 'aa_ref_prob_M', 'aa_ref_prob_N', 'aa_ref_prob_P', 'aa_ref_prob_Q', 'aa_ref_prob_R', 'aa_ref_prob_S', 'aa_ref_prob_T', 'aa_ref_prob_V', 'aa_ref_prob_W', 'aa_ref_prob_Y', 'aa_ref_prob_*', 'aa_ref_charge_positive_count', 'aa_ref_charge_negative_count', 'aa_ref_charge_neutral_count', 'aa_ref_charge_majority', 'hindex_avg', 'hindex_pos_cnt', 'hindex_neg_cnt', 'vol_avg', 'vol_tiny_cnt', 'vol_small_cnt', 'vol_big_cnt', 'aa_ref_aa_functional_group.ALIPHATIC_count', 'aa_ref_aa_functional_group.AROMATIC_count', 'aa_ref_aa_functional_group.NEGATIVE_count', 'aa_ref_aa_functional_group.POSITIVE_count', 'aa_ref_aa_functional_group.POLAR_count', 'aa_ref_alpha_prop_avg', 'aa_ref_beta_prop_avg', 'aa_ref_turn_prop_avg', 'aa_ref_alpha_is_majority', 'aa_ref_beta_is_majority', 'aa_ref_turn_is_majority', 'H_bond_donor_avg', 'H_bond_acceptor_avg', 'aa_alt_cnt_hist_A', 'aa_alt_cnt_hist_C', 'aa_alt_cnt_hist_D', 'aa_alt_cnt_hist_E', 'aa_alt_cnt_hist_F', 'aa_alt_cnt_hist_G', 'aa_alt_cnt_hist_H', 'aa_alt_cnt_hist_I', 'aa_alt_cnt_hist_K', 'aa_alt_cnt_hist_L', 'aa_alt_cnt_hist_M', 'aa_alt_cnt_hist_N', 'aa_alt_cnt_hist_P', 'aa_alt_cnt_hist_Q', 'aa_alt_cnt_hist_R', 'aa_alt_cnt_hist_S', 'aa_alt_cnt_hist_T', 'aa_alt_cnt_hist_V', 'aa_alt_cnt_hist_W', 'aa_alt_cnt_hist_Y', 'aa_alt_cnt_hist_*', 'aa_alt_cnt_prob_A', 'aa_alt_cnt_prob_C', 'aa_alt_cnt_prob_D', 'aa_alt_cnt_prob_E', 'aa_alt_cnt_prob_F', 'aa_alt_cnt_prob_G', 'aa_alt_cnt_prob_H', 'aa_alt_cnt_prob_I', 'aa_alt_cnt_prob_K', 'aa_alt_cnt_prob_L', 'aa_alt_cnt_prob_M', 'aa_alt_cnt_prob_N', 'aa_alt_cnt_prob_P', 'aa_alt_cnt_prob_Q', 'aa_alt_cnt_prob_R', 'aa_alt_cnt_prob_S', 'aa_alt_cnt_prob_T', 'aa_alt_cnt_prob_V', 'aa_alt_cnt_prob_W', 'aa_alt_cnt_prob_Y', 'aa_alt_cnt_prob_*', 'aa_alt_avg_freq_hist_A', 'aa_alt_avg_freq_hist_C', 'aa_alt_avg_freq_hist_D', 'aa_alt_avg_freq_hist_E', 'aa_alt_avg_freq_hist_F', 'aa_alt_avg_freq_hist_G', 'aa_alt_avg_freq_hist_H', 'aa_alt_avg_freq_hist_I', 'aa_alt_avg_freq_hist_K', 'aa_alt_avg_freq_hist_L', 'aa_alt_avg_freq_hist_M', 'aa_alt_avg_freq_hist_N', 'aa_alt_avg_freq_hist_P', 'aa_alt_avg_freq_hist_Q', 'aa_alt_avg_freq_hist_R', 'aa_alt_avg_freq_hist_S', 'aa_alt_avg_freq_hist_T', 'aa_alt_avg_freq_hist_V', 'aa_alt_avg_freq_hist_W', 'aa_alt_avg_freq_hist_Y', 'aa_alt_avg_freq_hist_*', 'aa_alt_avg_freq_prob_A', 'aa_alt_avg_freq_prob_C', 'aa_alt_avg_freq_prob_D', 'aa_alt_avg_freq_prob_E', 'aa_alt_avg_freq_prob_F', 'aa_alt_avg_freq_prob_G', 'aa_alt_avg_freq_prob_H', 'aa_alt_avg_freq_prob_I', 'aa_alt_avg_freq_prob_K', 'aa_alt_avg_freq_prob_L', 'aa_alt_avg_freq_prob_M', 'aa_alt_avg_freq_prob_N', 'aa_alt_avg_freq_prob_P', 'aa_alt_avg_freq_prob_Q', 'aa_alt_avg_freq_prob_R', 'aa_alt_avg_freq_prob_S', 'aa_alt_avg_freq_prob_T', 'aa_alt_avg_freq_prob_V', 'aa_alt_avg_freq_prob_W', 'aa_alt_avg_freq_prob_Y', 'aa_alt_avg_freq_prob_*', 'sub_diff_hindex_avg', 'sub_diff_hindex_avg_weighted', 'sub_diff_vol_avg', 'sub_diff_vol_avg_weighted', 'sub_func_group_stay_cnt', 'sub_func_group_stay_freq', 'sub_func_group_move_cnt', 'sub_func_group_move_freq', 'sub_func_group_trans_0-0', 'sub_func_group_trans_0-1', 'sub_func_group_trans_0-2', 'sub_func_group_trans_0-3', 'sub_func_group_trans_0-4', 'sub_func_group_trans_0-5', 'sub_func_group_trans_1-0', 'sub_func_group_trans_1-1', 'sub_func_group_trans_1-2', 'sub_func_group_trans_1-3', 'sub_func_group_trans_1-4', 'sub_func_group_trans_1-5', 'sub_func_group_trans_2-0', 'sub_func_group_trans_2-1', 'sub_func_group_trans_2-2', 'sub_func_group_trans_2-3', 'sub_func_group_trans_2-4', 'sub_func_group_trans_2-5', 'sub_func_group_trans_3-0', 'sub_func_group_trans_3-1', 'sub_func_group_trans_3-2', 'sub_func_group_trans_3-3', 'sub_func_group_trans_3-4', 'sub_func_group_trans_3-5', 'sub_func_group_trans_4-0', 'sub_func_group_trans_4-1', 'sub_func_group_trans_4-2', 'sub_func_group_trans_4-3', 'sub_func_group_trans_4-4', 'sub_func_group_trans_4-5', 'sub_diff_prop_avg_alpha', 'sub_diff_prop_avg_beta', 'sub_diff_prop_avg_turn', 'sub_diff_prop_avg_alpha_weighed', 'sub_diff_prop_avg_beta_weighed', 'sub_diff_prop_avg_turn_weighed', 'donor_diff_avg', 'donor_diff_avg_weighted', 'acceptor_diff_avg', 'acceptor_diff_avg_weighted', 'solvent_acc_avg', 'solvent_acc_std', 'hsa2_cn_avg', 'hsa2_cn_std', 'hsb2_cn_avg', 'hsb2_cn_std', 'backbone_Phi_angle_avg', 'backbone_Phi_angle_std', 'backbone_Psi_angle_avg', 'backbone_Psi_angle_std', 'c-alpha_tau_angle_avg', 'c-alph_tau_angle_std', 'c-alpha_theta_angle_avg', 'c-alph_theta_angle_std', 'helix_prob_avg', 'helix_prob_std', 'sheet_prob_avg', 'sheet_prob_std', 'turn_prob_avg', 'turn_prob_std', 'spd_helix_is_majority', 'spd_sheet_is_majority', 'spd_turn_is_majority', 'hsa2_HSE-up_avg', 'hsa2_HSE-up_std', 'hsa2_HSE-down_avg', 'hsa2_HSE-down_std', 'hsb2_HSE-up_avg', 'hsb2_HSE-up_std', 'hsb2_HSE-down_avg', 'hsb2_HSE-down_std', 'whole_domain_phastCons_avg', 'whole_domain_phastCons_std', 'whole_domain_phyloP_avg', 'whole_domain_phyloP_std', 'domain_pos', 'domain_length', 'domain_pos_location_begin', 'domain_pos_location_middle', 'domain_pos_location_end', 'prot_avg_length', 'prot_pos_location_begin', 'prot_pos_location_middle', 'prot_pos_location_end']
+
+    domains_features_df = pd.DataFrame(features_lod)
+    domains_features_df = domains_features_df.set_index('state_id')
     domains_features_df = domains_features_df.sort_index()
-
-    # Once for ALL domains, save df
-    domains_features_df.to_csv("positions_features_fixed.csv", sep='\t')
+    domains_features_df.to_csv("positions_features_fixed.csv", columns=columns, sep='\t', index_label='')

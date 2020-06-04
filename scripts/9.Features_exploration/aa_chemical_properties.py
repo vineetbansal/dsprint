@@ -68,28 +68,6 @@ aa_charge_dict = {'A': aa_charge.NEUTRAL,
              'Y': aa_charge.NEUTRAL,
              '*': aa_charge.NEUTRAL}
 
-#Based on "A simple method for displaying the hydropatic character of a protein, Kyte & Doolittle, 1982
-hindex_Kyte_Doolitle = {'A': 1.8,
-                        'C': 2.5,
-                        'D': -3.5,
-                        'E': -3.5,
-                        'F': 2.8,
-                        'G': -0.4,
-                        'H': -3.2,
-                        'I': 4.5,
-                        'K': -3.9,
-                        'L': 3.8,
-                        'M': 1.9,
-                        'N': -3.5,
-                        'P': -1.6,
-                        'Q': -3.5,
-                        'R': -4.5,
-                        'S': -0.8,
-                        'T': -0.7,
-                        'V': 4.2,
-                        'W': -0.9,
-                        'Y': -1.3,
-                        '*': 0}
 
 #Based on: "EMPIRICAL PREDICTIONS OF PROTEIN CONFORMATION", Chou & Fasman, 1978
 propensity_chou_fasman = {'A': [1.42, 0.83, 0.66],
